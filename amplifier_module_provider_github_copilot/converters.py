@@ -97,7 +97,12 @@ def convert_messages_to_prompt(messages: list[dict[str, Any]]) -> str:
                 # Include tool call information
                 tool_parts = []
                 for tc in tool_calls:
-                    tool_name = tc.get("name", tc.get("function", {}).get("name", "unknown"))
+                    tool_name = (
+                        tc.get("tool")
+                        or tc.get("name")
+                        or tc.get("function", {}).get("name")
+                        or "unknown"
+                    )
                     tool_args = tc.get("arguments", tc.get("function", {}).get("arguments", {}))
                     if isinstance(tool_args, str):
                         try:
