@@ -308,14 +308,14 @@ def _ensure_executable(path: str) -> None:
     Some package managers (notably uv) don't preserve the execute bit on
     bundled binaries.  Detect and fix this so subprocess.Popen won't fail
     with PermissionError.
-    """
-    import os
-    import stat
 
-    if not os.access(path, os.X_OK):
-        current = os.stat(path).st_mode
-        os.chmod(path, current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        logger.info(f"[MOUNT] Fixed missing execute permission on {path}")
+    This is a thin wrapper around the shared ensure_executable utility.
+    """
+    from pathlib import Path
+
+    from ._permissions import ensure_executable
+
+    ensure_executable(Path(path))
 
 
 def _find_copilot_cli(config: dict[str, Any]) -> str | None:
