@@ -258,10 +258,10 @@ def convert_copilot_response_to_chat_response(
 
     # Extract tool requests
     tool_requests = None
-    if hasattr(data, "tool_requests"):
-        tool_requests = data.tool_requests
-    elif isinstance(data, dict):
+    if isinstance(data, dict):
         tool_requests = data.get("tool_requests", data.get("toolRequests"))
+    else:
+        tool_requests = getattr(data, "tool_requests", None)
 
     if tool_requests:
         for tr in tool_requests:
@@ -351,15 +351,12 @@ def _extract_usage(data: Any) -> Usage:
     output_tokens = 0
 
     # Try to extract from various possible locations
-    if hasattr(data, "input_tokens"):
-        input_tokens = int(data.input_tokens or 0)
-    elif isinstance(data, dict):
+    if isinstance(data, dict):
         input_tokens = int(data.get("input_tokens", data.get("inputTokens", 0)) or 0)
-
-    if hasattr(data, "output_tokens"):
-        output_tokens = int(data.output_tokens or 0)
-    elif isinstance(data, dict):
         output_tokens = int(data.get("output_tokens", data.get("outputTokens", 0)) or 0)
+    else:
+        input_tokens = int(getattr(data, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(data, "output_tokens", 0) or 0)
 
     return Usage(
         input_tokens=input_tokens,

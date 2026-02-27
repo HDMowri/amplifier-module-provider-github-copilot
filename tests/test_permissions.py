@@ -6,12 +6,21 @@ Batch 2 - Security Hardening (v1.0.2)
 
 import os
 import stat
+import sys
 from pathlib import Path
+
+import pytest
+
+# Skip tests that require Unix permissions on Windows
+UNIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32", reason="Unix permission bits (chmod, S_IXUSR) not supported on Windows"
+)
 
 
 class TestEnsureExecutable:
     """Tests for ensure_executable() function."""
 
+    @UNIX_ONLY
     def test_ensure_executable_sets_user_execute(self, tmp_path: Path) -> None:
         """Should set S_IXUSR permission."""
         from amplifier_module_provider_github_copilot._permissions import ensure_executable
@@ -26,6 +35,7 @@ class TestEnsureExecutable:
         mode = script.stat().st_mode
         assert mode & stat.S_IXUSR, "User execute bit should be set"
 
+    @UNIX_ONLY
     def test_ensure_executable_sets_group_execute(self, tmp_path: Path) -> None:
         """Should set S_IXGRP permission."""
         from amplifier_module_provider_github_copilot._permissions import ensure_executable
@@ -83,9 +93,7 @@ class TestEnsureExecutable:
 
         assert result is True
 
-    def test_ensure_executable_returns_true_when_already_executable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_ensure_executable_returns_true_when_already_executable(self, tmp_path: Path) -> None:
         """Should return True when file is already executable (no-op)."""
         from amplifier_module_provider_github_copilot._permissions import ensure_executable
 
@@ -107,9 +115,7 @@ class TestEnsureExecutable:
 
         assert result is False
 
-    def test_ensure_executable_preserves_existing_permissions(
-        self, tmp_path: Path
-    ) -> None:
+    def test_ensure_executable_preserves_existing_permissions(self, tmp_path: Path) -> None:
         """Should preserve existing read/write permissions."""
         from amplifier_module_provider_github_copilot._permissions import ensure_executable
 
@@ -139,6 +145,7 @@ class TestEnsureExecutable:
         assert result is True
         assert os.access(script, os.X_OK)
 
+    @UNIX_ONLY
     def test_ensure_executable_verifies_with_os_access(self, tmp_path: Path) -> None:
         """os.access(path, X_OK) should return True after ensure_executable."""
         from amplifier_module_provider_github_copilot._permissions import ensure_executable
@@ -156,6 +163,7 @@ class TestEnsureExecutable:
 class TestEdgeCases:
     """Edge case tests for error handling."""
 
+    @UNIX_ONLY
     def test_ensure_executable_handles_oserror(self, tmp_path: Path, monkeypatch) -> None:
         """Should return False and log DEBUG on generic OSError."""
         from amplifier_module_provider_github_copilot._permissions import ensure_executable
@@ -174,9 +182,8 @@ class TestEdgeCases:
 
         assert result is False
 
-    def test_ensure_executable_handles_permission_error(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    @UNIX_ONLY
+    def test_ensure_executable_handles_permission_error(self, tmp_path: Path, monkeypatch) -> None:
         """Should return False on PermissionError."""
         from amplifier_module_provider_github_copilot._permissions import ensure_executable
 
@@ -213,13 +220,11 @@ class TestSecurityCompliance:
             ensure_executable(script)
 
             mode = script.stat().st_mode
-            assert not (
-                mode & stat.S_IXOTH
-            ), f"S_IXOTH should not be set for start mode {start_mode:o}"
+            assert not (mode & stat.S_IXOTH), (
+                f"S_IXOTH should not be set for start mode {start_mode:o}"
+            )
 
-    def test_world_execute_not_added_to_existing_permissions(
-        self, tmp_path: Path
-    ) -> None:
+    def test_world_execute_not_added_to_existing_permissions(self, tmp_path: Path) -> None:
         """Even if file has other world permissions, don't add execute."""
         from amplifier_module_provider_github_copilot._permissions import ensure_executable
 
@@ -230,6 +235,6 @@ class TestSecurityCompliance:
         ensure_executable(script)
 
         mode = script.stat().st_mode
-        assert not (
-            mode & stat.S_IXOTH
-        ), "World execute should not be added even if world has other perms"
+        assert not (mode & stat.S_IXOTH), (
+            "World execute should not be added even if world has other perms"
+        )

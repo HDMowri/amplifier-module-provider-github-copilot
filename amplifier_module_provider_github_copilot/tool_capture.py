@@ -73,10 +73,12 @@ import json
 import logging
 from typing import Any
 
+from copilot.types import ToolResult
+
 logger = logging.getLogger(__name__)
 
 
-def _noop_tool_handler(args: Any) -> str:
+def _noop_tool_handler(args: Any) -> ToolResult:
     """
     No-op handler for SDK Tool objects.
 
@@ -89,9 +91,9 @@ def _noop_tool_handler(args: Any) -> str:
         args: Tool arguments (ignored)
 
     Returns:
-        JSON error message
+        ToolResult with error message
     """
-    return json.dumps({"error": "Tool execution denied by provider policy"})
+    return {"textResultForLlm": json.dumps({"error": "Tool execution denied by provider policy"})}
 
 
 def convert_tools_for_sdk(tool_specs: list[Any]) -> list[Any]:

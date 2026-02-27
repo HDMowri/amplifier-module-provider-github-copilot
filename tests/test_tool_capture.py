@@ -172,27 +172,32 @@ class TestMakeDenyAllHook:
 class TestNoopToolHandler:
     """Tests for _noop_tool_handler (line 94)."""
 
-    def test_returns_json_error_string(self):
-        """Handler should return a JSON string with an error message."""
+    def test_returns_tool_result_with_error(self):
+        """Handler should return a ToolResult dict with an error message."""
         import json
 
         from amplifier_module_provider_github_copilot.tool_capture import _noop_tool_handler
 
         result = _noop_tool_handler({"some": "args"})
 
-        assert isinstance(result, str)
-        parsed = json.loads(result)
+        # SDK expects ToolResult (TypedDict with textResultForLlm)
+        assert isinstance(result, dict)
+        assert "textResultForLlm" in result
+        parsed = json.loads(result["textResultForLlm"])
         assert "error" in parsed
         assert parsed["error"] == "Tool execution denied by provider policy"
 
-    def test_returns_valid_json(self):
-        """Handler result should always be valid JSON."""
+    def test_returns_valid_tool_result(self):
+        """Handler result should be a valid ToolResult with JSON content."""
         import json
 
         from amplifier_module_provider_github_copilot.tool_capture import _noop_tool_handler
 
         result = _noop_tool_handler(None)
-        parsed = json.loads(result)
+        # Result is ToolResult dict, textResultForLlm contains JSON
+        assert isinstance(result, dict)
+        assert "textResultForLlm" in result
+        parsed = json.loads(result["textResultForLlm"])
         assert isinstance(parsed, dict)
 
     def test_ignores_arguments(self):
@@ -308,7 +313,10 @@ class TestConvertToolsForSdkExtended:
         assert len(result) == 1
         # Invoke the handler to verify it's the noop handler
         handler_result = result[0].handler({"arg": "val"})
-        parsed = json.loads(handler_result)
+        # Handler returns ToolResult dict
+        assert isinstance(handler_result, dict)
+        assert "textResultForLlm" in handler_result
+        parsed = json.loads(handler_result["textResultForLlm"])
         assert parsed["error"] == "Tool execution denied by provider policy"
 
     def test_mixed_object_and_dict_specs(self):

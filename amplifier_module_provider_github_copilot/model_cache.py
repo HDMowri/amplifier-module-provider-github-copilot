@@ -81,6 +81,41 @@ BUNDLED_MODEL_LIMITS: dict[str, tuple[int, int]] = {
 }
 
 
+def _normalize_model_name(model_id: str) -> str:
+    """
+    Normalize model name variants to canonical form.
+
+    Handles common user typos/variations:
+    - claude-opus-4-5 → claude-opus-4.5 (dash to dot for version numbers)
+    - claude-opus-4.5 → claude-opus-4.5 (already correct)
+
+    The pattern matches version-like suffixes: -X-Y at end of string
+    becomes -X.Y (converting last dash to dot for numeric pairs).
+
+    Evidence: session 94f00edf (2026-02-19) — user confusion with dash vs dot
+
+    Args:
+        model_id: Model identifier that may use dash format
+
+    Returns:
+        Normalized model identifier with dot format for versions
+
+    Example:
+        >>> _normalize_model_name("claude-opus-4-5")
+        'claude-opus-4.5'
+        >>> _normalize_model_name("gpt-5-1")
+        'gpt-5.1'
+        >>> _normalize_model_name("claude-opus-4.5")
+        'claude-opus-4.5'
+    """
+    import re
+
+    # Pattern: -X-Y at end → -X.Y (version number normalization)
+    # Matches: -4-5, -5-1, -4-6, etc. at end of string
+    normalized = re.sub(r"-(\d+)-(\d+)$", r"-\1.\2", model_id)
+    return normalized
+
+
 def get_fallback_limits(model_id: str) -> tuple[int, int] | None:
     """
     Get bundled context limits for a model.
@@ -88,8 +123,10 @@ def get_fallback_limits(model_id: str) -> tuple[int, int] | None:
     This is the "tier 2" fallback when disk cache is unavailable.
     Returns hardcoded limits derived from SDK data at build time.
 
+    Supports model name normalization: claude-opus-4-5 → claude-opus-4.5
+
     Args:
-        model_id: Model identifier (e.g., "claude-opus-4.5")
+        model_id: Model identifier (e.g., "claude-opus-4.5" or "claude-opus-4-5")
 
     Returns:
         Tuple of (context_window, max_output_tokens) if model is known,
@@ -98,10 +135,25 @@ def get_fallback_limits(model_id: str) -> tuple[int, int] | None:
     Example:
         >>> get_fallback_limits("claude-opus-4.5")
         (200000, 32000)
+        >>> get_fallback_limits("claude-opus-4-5")  # normalized
+        (200000, 32000)
         >>> get_fallback_limits("unknown-model")
         None
     """
-    return BUNDLED_MODEL_LIMITS.get(model_id)
+    # Try exact match first
+    result = BUNDLED_MODEL_LIMITS.get(model_id)
+    if result is not None:
+        return result
+
+    # Try normalized name
+    normalized = _normalize_model_name(model_id)
+    if normalized != model_id:
+        result = BUNDLED_MODEL_LIMITS.get(normalized)
+        if result is not None:
+            logger.debug(f"[MODEL_CACHE] Normalized '{model_id}' → '{normalized}'")
+            return result
+
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

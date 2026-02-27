@@ -1136,7 +1136,8 @@ class CopilotSdkProvider:
                     )
                 else:
                     raise CopilotTimeoutError(
-                        f"Streaming request timed out after {timeout}s"
+                        message=f"Streaming request timed out after {timeout}s",
+                        timeout=timeout,
                     ) from None
             except Exception as e:
                 # CopilotSdkLoopError or other errors
@@ -1296,6 +1297,8 @@ class CopilotSdkProvider:
         content: TextContent | ThinkingContent | ToolCallContent,
     ) -> None:
         """Async helper to emit content through hooks."""
+        if not self._coordinator or not hasattr(self._coordinator, "hooks"):
+            return
         try:
             await self._coordinator.hooks.emit(
                 "llm:content_block",

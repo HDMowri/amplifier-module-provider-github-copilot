@@ -16,7 +16,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ._constants import (
     CLIENT_HEALTH_CHECK_TIMEOUT,
@@ -33,6 +33,26 @@ from .exceptions import (
     CopilotSessionError,
     CopilotTimeoutError,
 )
+
+
+def _is_subprocess_dead_error(e: BaseException) -> bool:
+    """Check if an exception indicates the subprocess has died.
+
+    These errors are expected during Ctrl+C and should be logged at DEBUG,
+    not WARNING, to avoid alarming users with expected cleanup noise.
+
+    Args:
+        e: The exception to check
+
+    Returns:
+        True if this is a subprocess-death error (BrokenPipeError, ConnectionResetError)
+    """
+    if isinstance(e, (BrokenPipeError, ConnectionResetError)):
+        return True
+    # Check for wrapped pipe errors
+    if isinstance(e, OSError) and e.errno in (32, 104):  # EPIPE, ECONNRESET
+        return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +195,11 @@ class CopilotClientWrapper:
             )
             return True
         except Exception as e:
-            logger.warning(f"[CLIENT] Health check failed: {type(e).__name__}: {e}")
+            # Subprocess-death errors are expected on Ctrl+C, log at DEBUG
+            if _is_subprocess_dead_error(e):
+                logger.debug(f"[CLIENT] Health check: subprocess terminated: {e}")
+            else:
+                logger.warning(f"[CLIENT] Health check failed: {type(e).__name__}: {e}")
             return False
 
     async def _reset_client(self) -> None:
@@ -260,7 +284,10 @@ class CopilotClientWrapper:
                     ensure_executable(_cli_bin)
 
                 logger.info("[CLIENT] Initializing Copilot client...")
-                client = CopilotClient(client_options)
+                # Cast to SDK's TypedDict - our dict matches the required shape
+                from copilot.types import CopilotClientOptions
+
+                client = CopilotClient(cast(CopilotClientOptions, client_options))
                 await client.start()
 
                 # Only assign to instance after successful start
@@ -487,7 +514,10 @@ class CopilotClientWrapper:
                 f"streaming: {streaming}, reasoning: {reasoning_effort}, "
                 f"tools: {len(tools) if tools else 0}"
             )
-            session = await client.create_session(session_config)
+            # Cast to SDK's TypedDict - our dict matches the required shape
+            from copilot.types import SessionConfig
+
+            session = await client.create_session(cast(SessionConfig, session_config))
             logger.debug(f"[CLIENT] Session created: {session.session_id}")
         except Exception as e:
             error_msg = str(e).lower()

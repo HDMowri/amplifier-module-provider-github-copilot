@@ -14,7 +14,7 @@
 #
 # =============================================================================
 
-.PHONY: install test coverage lint format check clean help sdk-assumptions
+.PHONY: install test coverage lint format check clean help sdk-assumptions acceptance-tests
 
 # Default Python - override with: make test PYTHON=python3.12
 PYTHON ?= python
@@ -50,6 +50,11 @@ test:
 # Run SDK assumption tests only (use when upgrading SDK)
 sdk-assumptions:
 	$(PYTHON) -m pytest tests/sdk_assumptions/ -v --tb=long
+
+# Run acceptance tests (integration tests for user entry points)
+# Requires live environment; use RUN_LIVE_TESTS=1 for API tests
+acceptance-tests:
+	$(PYTHON) -m pytest tests/integration/test_amplifier_user_entry_point_acceptance.py -v
 
 # Run tests with coverage
 coverage:

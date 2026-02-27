@@ -565,9 +565,12 @@ class TestStreamingErrors:
                 with patch(
                     "copilot.generated.session_events.SessionEventType", MockSessionEventType
                 ):
+                    from amplifier_core.llm_errors import LLMTimeoutError
+
                     request = {"messages": [{"role": "user", "content": "Test"}]}
 
-                    with pytest.raises(CopilotTimeoutError):
+                    # Provider wraps CopilotTimeoutError in LLMTimeoutError
+                    with pytest.raises(LLMTimeoutError):
                         await streaming_provider.complete(request)
 
     @pytest.mark.asyncio
