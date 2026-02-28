@@ -37,7 +37,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import platform
 import shutil
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime
@@ -677,68 +679,33 @@ def _get_provider_cwd() -> str:
     return str(module_root)
 
 
-def _check_ollama_blocking_issue() -> str | None:
-    """
-    Check if Copilot provider is configured as priority 1.
-
-    REQUIREMENT: provider-github-copilot MUST have priority 1 for E2E tests.
-    ═══════════════════════════════════════════════════════════════════════════
-    If another provider (e.g., Ollama) has higher priority and fails to connect,
-    Amplifier CLI crashes before Copilot is even tried.
-
-    This check ensures the test environment is correctly configured.
-
-    Returns:
-        Skip reason string if env is misconfigured, None if OK to proceed
-    """
-    settings_path = Path.home() / ".amplifier" / "settings.yaml"
-    if not settings_path.exists():
-        return (
-            "~/.amplifier/settings.yaml not found.\n"
-            "Run: amplifier init"
-        )
-
-    try:
-        import yaml
-        with open(settings_path) as f:
-            settings = yaml.safe_load(f) or {}
-
-        providers = settings.get("config", {}).get("providers", [])
-        copilot_priority = None
-
-        for p in providers:
-            module_name = p.get("module", "")
-            if module_name == "provider-github-copilot":
-                copilot_config = p.get("config", {})
-                copilot_priority = int(copilot_config.get("priority", 999))
-                break
-
-        if copilot_priority is None:
-            return (
-                "provider-github-copilot not found in ~/.amplifier/settings.yaml\n\n"
-                "Add to settings.yaml under config.providers:\n"
-                "  - module: provider-github-copilot\n"
-                "    config:\n"
-                "      priority: 1"
-            )
-
-        if copilot_priority != 1:
-            return (
-                f"provider-github-copilot has priority {copilot_priority}, must be 1.\n\n"
-                f"Edit ~/.amplifier/settings.yaml:\n"
-                f"  - module: provider-github-copilot\n"
-                f"    config:\n"
-                f"      priority: 1  # <-- Change from {copilot_priority} to 1\n\n"
-                f"This ensures Copilot is tried first, avoiding crashes from other providers."
-            )
-
-        return None  # OK to proceed
-
-    except Exception as e:
-        logger.debug(f"Could not check settings: {e}")
-        return f"Could not read ~/.amplifier/settings.yaml: {e}"
-
-
+# ═══════════════════════════════════════════════════════════════════════════════
+# WINDOWS ARM64 SKIP — Class-Level
+# ═══════════════════════════════════════════════════════════════════════════════
+# Amplifier's bundle preparation tries to install `tool-mcp` module which
+# depends on `cryptography` via the dependency chain:
+#   tool-mcp → mcp → pyjwt[crypto] → cryptography
+#
+# On Windows ARM64, `cryptography` has no pre-built wheel and requires Rust
+# to compile from source. The build fails with:
+#   "Unsupported platform: win_arm64"
+#
+# This causes Amplifier's bundle prep to hang for ~30 seconds attempting
+# the build, which exhausts the Copilot SDK's internal ping() timeout
+# (also 30s), resulting in TimeoutError during client initialization.
+#
+# This is NOT a provider bug - it's a platform limitation. The raw SDK
+# works perfectly on Windows ARM64 when tested in isolation.
+#
+# Windows x64 DOES work because cryptography has pre-built wheels for x64.
+# ═══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.skipif(
+    platform.system() == "Windows" and platform.machine() in ("ARM64", "aarch64"),
+    reason=(
+        "Amplifier's tool-mcp module requires cryptography which has no ARM64 wheel. "
+        "This test passes on Windows x64, Linux, and macOS."
+    ),
+)
 class TestAmplifierEndToEnd:
     """
     Full end-to-end tests that invoke Amplifier CLI and verify
@@ -751,22 +718,11 @@ class TestAmplifierEndToEnd:
         - Amplifier CLI installed via 'uv tool install' and on PATH
         - Copilot provider configured in Amplifier
 
-    IMPORTANT: Multi-Provider Configuration Warning
-    ═══════════════════════════════════════════════════════════════════════════
-    These tests use the user's ~/.amplifier/settings.yaml configuration.
-    If you have multiple providers configured (e.g., Ollama + Copilot),
-    and a higher-priority provider fails to connect, the ENTIRE session
-    crashes — even if Copilot would work fine.
-
-    This is an Amplifier core bug (provider mount failure propagation).
-
-    If tests fail with "Ollama server not reachable":
-        Option A: Start Ollama:  ollama serve
-        Option B: Remove Ollama from settings.yaml
-        Option C: Set provider-github-copilot priority to 1 (highest)
-
-    See _check_ollama_blocking_issue() for automated detection.
-    ═══════════════════════════════════════════════════════════════════════════
+    Platform Notes:
+        - Windows x64: ✓ Works (cryptography has pre-built wheels)
+        - Windows ARM64: ✗ Skipped (no cryptography wheel, see class decorator)
+        - Linux/WSL: ✓ Works
+        - macOS: ✓ Works
     """
 
     @pytest.mark.asyncio
@@ -776,55 +732,7 @@ class TestAmplifierEndToEnd:
 
         This is a smoke test that validates Amplifier can use the Copilot
         provider without errors.
-
-        Platform Notes:
-            - Windows x64: ✓ Works fine (cryptography has pre-built wheels)
-            - Windows ARM64: ✗ Skipped (see skip condition below)
-            - Linux/WSL: ✓ Works fine
-            - macOS: ✓ Works fine
         """
-        import platform
-        import subprocess
-
-        # ═══════════════════════════════════════════════════════════════════════════
-        # WINDOWS ARM64 SKIP EXPLANATION
-        # ═══════════════════════════════════════════════════════════════════════════
-        # Amplifier's bundle preparation tries to install `tool-mcp` module which
-        # depends on `cryptography` via the dependency chain:
-        #   tool-mcp → mcp → pyjwt[crypto] → cryptography
-        #
-        # On Windows ARM64, `cryptography` has no pre-built wheel and requires Rust
-        # to compile from source. The build fails with:
-        #   "Unsupported platform: win_arm64"
-        #
-        # This causes Amplifier's bundle prep to hang for ~30 seconds attempting
-        # the build, which exhausts the Copilot SDK's internal ping() timeout
-        # (also 30s), resulting in TimeoutError during client initialization.
-        #
-        # This is NOT a provider bug - it's a platform limitation. The raw SDK
-        # works perfectly on Windows ARM64 when tested in isolation.
-        #
-        # Windows x64 DOES work because cryptography has pre-built wheels for x64.
-        # ═══════════════════════════════════════════════════════════════════════════
-        if platform.system() == "Windows" and platform.machine() in ("ARM64", "aarch64"):
-            pytest.skip(
-                "Skipping on Windows ARM64: Amplifier's tool-mcp module requires "
-                "cryptography which has no ARM64 wheel (needs Rust to build). "
-                "This test passes on Windows x64, Linux, and macOS."
-            )
-
-        # ═══════════════════════════════════════════════════════════════════════════
-        # OLLAMA BLOCKING CHECK
-        # ═══════════════════════════════════════════════════════════════════════════
-        # If Ollama is configured with higher priority than Copilot but not running,
-        # Amplifier CLI will crash before Copilot provider is even used.
-        # This is an Amplifier core bug, not a Copilot provider bug.
-        # ═══════════════════════════════════════════════════════════════════════════
-        ollama_issue = _check_ollama_blocking_issue()
-        if ollama_issue:
-            logger.warning(f"Ollama blocking issue detected:\n{ollama_issue}")
-            pytest.skip(ollama_issue)
-
         amplifier_bin = _find_amplifier_cli()
         if not amplifier_bin:
             pytest.skip(
@@ -868,55 +776,7 @@ class TestAmplifierEndToEnd:
 
         This is the definitive proof that the SDK Driver architecture
         fixes the 305-turn loop.
-
-        Platform Notes:
-            - Windows x64: ✓ Works fine (cryptography has pre-built wheels)
-            - Windows ARM64: ✗ Skipped (see skip condition below)
-            - Linux/WSL: ✓ Works fine
-            - macOS: ✓ Works fine
         """
-        import platform
-        import subprocess
-
-        # ═══════════════════════════════════════════════════════════════════════════
-        # WINDOWS ARM64 SKIP EXPLANATION
-        # ═══════════════════════════════════════════════════════════════════════════
-        # Amplifier's bundle preparation tries to install `tool-mcp` module which
-        # depends on `cryptography` via the dependency chain:
-        #   tool-mcp → mcp → pyjwt[crypto] → cryptography
-        #
-        # On Windows ARM64, `cryptography` has no pre-built wheel and requires Rust
-        # to compile from source. The build fails with:
-        #   "Unsupported platform: win_arm64"
-        #
-        # This causes Amplifier's bundle prep to hang for ~30 seconds attempting
-        # the build, which exhausts the Copilot SDK's internal ping() timeout
-        # (also 30s), resulting in TimeoutError during client initialization.
-        #
-        # This is NOT a provider bug - it's a platform limitation. The raw SDK
-        # works perfectly on Windows ARM64 when tested in isolation.
-        #
-        # Windows x64 DOES work because cryptography has pre-built wheels for x64.
-        # ═══════════════════════════════════════════════════════════════════════════
-        if platform.system() == "Windows" and platform.machine() in ("ARM64", "aarch64"):
-            pytest.skip(
-                "Skipping on Windows ARM64: Amplifier's tool-mcp module requires "
-                "cryptography which has no ARM64 wheel (needs Rust to build). "
-                "This test passes on Windows x64, Linux, and macOS."
-            )
-
-        # ═══════════════════════════════════════════════════════════════════════════
-        # OLLAMA BLOCKING CHECK
-        # ═══════════════════════════════════════════════════════════════════════════
-        # If Ollama is configured with higher priority than Copilot but not running,
-        # Amplifier CLI will crash before Copilot provider is even used.
-        # This is an Amplifier core bug, not a Copilot provider bug.
-        # ═══════════════════════════════════════════════════════════════════════════
-        ollama_issue = _check_ollama_blocking_issue()
-        if ollama_issue:
-            logger.warning(f"Ollama blocking issue detected:\n{ollama_issue}")
-            pytest.skip(ollama_issue)
-
         amplifier_bin = _find_amplifier_cli()
         if not amplifier_bin:
             pytest.skip(

@@ -31,10 +31,9 @@ class TestMount:
                         assert "github-copilot" in mock_coordinator.mounted_providers
 
     @pytest.mark.asyncio
-    async def test_mount_missing_cli(self, mock_coordinator):
+    async def test_mount_missing_cli(self, mock_coordinator, disable_sdk_bundled_binary):
         """Mount should return None when CLI not found."""
-        # Remove copilot from sys.modules to simulate SDK not installed
-        with patch.dict("sys.modules", {"copilot": None}):
+        with disable_sdk_bundled_binary():
             with patch("shutil.which", return_value=None):
                 cleanup = await mount(mock_coordinator, {})
 
@@ -158,12 +157,11 @@ class TestMountErrorHandling:
 class TestFindCopilotCli:
     """Tests for _find_copilot_cli() functionality."""
 
-    def test_cli_from_shutil_which(self):
-        """_find_copilot_cli should find CLI via shutil.which() when SDK not installed."""
+    def test_cli_from_shutil_which(self, disable_sdk_bundled_binary):
+        """_find_copilot_cli should find CLI via shutil.which() when SDK binary not available."""
         from amplifier_module_provider_github_copilot import _find_copilot_cli
 
-        # Remove copilot from sys.modules to simulate SDK not installed
-        with patch.dict("sys.modules", {"copilot": None}):
+        with disable_sdk_bundled_binary():
             with patch.dict("os.environ", {}, clear=True):
                 with patch("shutil.which", return_value="/usr/bin/copilot"):
                     with patch("amplifier_module_provider_github_copilot._ensure_executable"):
@@ -171,32 +169,30 @@ class TestFindCopilotCli:
 
                         assert result == "/usr/bin/copilot"
 
-    def test_cli_not_found_returns_none(self):
-        """_find_copilot_cli should return None when CLI not found anywhere."""
+    def test_cli_not_found_returns_none(self, disable_sdk_bundled_binary):
+        """_find_copilot_cli should return None when CLI not found (SDK binary unavailable)."""
         from amplifier_module_provider_github_copilot import _find_copilot_cli
 
-        # Remove copilot from sys.modules to simulate SDK not installed
-        with patch.dict("sys.modules", {"copilot": None}):
+        with disable_sdk_bundled_binary():
             with patch.dict("os.environ", {}, clear=True):
                 with patch("shutil.which", return_value=None):
                     result = _find_copilot_cli({})
 
                     assert result is None
 
-    def test_cli_discovery_exception_returns_none(self):
+    def test_cli_discovery_exception_returns_none(self, disable_sdk_bundled_binary):
         """_find_copilot_cli should return None on unexpected exceptions."""
         from amplifier_module_provider_github_copilot import _find_copilot_cli
 
-        # Remove copilot from sys.modules to simulate SDK not installed
-        with patch.dict("sys.modules", {"copilot": None}):
+        with disable_sdk_bundled_binary():
             with patch.dict("os.environ", {}, clear=True):
                 with patch("shutil.which", side_effect=OSError("Permission denied")):
                     result = _find_copilot_cli({})
 
                     assert result is None
 
-    def test_cli_finds_copilot_exe_fallback(self):
-        """_find_copilot_cli should find copilot.exe when copilot is not found."""
+    def test_cli_finds_copilot_exe_fallback(self, disable_sdk_bundled_binary):
+        """_find_copilot_cli should find copilot.exe when copilot is not found (SDK binary unavailable)."""
         from amplifier_module_provider_github_copilot import _find_copilot_cli
 
         def which_side_effect(name):
@@ -206,8 +202,7 @@ class TestFindCopilotCli:
                 return "C:\\Program Files\\copilot\\copilot.exe"
             return None
 
-        # Remove copilot from sys.modules to simulate SDK not installed
-        with patch.dict("sys.modules", {"copilot": None}):
+        with disable_sdk_bundled_binary():
             with patch.dict("os.environ", {}, clear=True):
                 with patch("shutil.which", side_effect=which_side_effect):
                     with patch("amplifier_module_provider_github_copilot._ensure_executable"):
@@ -383,7 +378,6 @@ class TestSingleton:
     def test_cli_sdk_binary_preferred_over_path(self):
         """SDK bundled binary should be preferred over PATH binary."""
         from amplifier_module_provider_github_copilot import _find_copilot_cli
-        from pathlib import Path
 
         mock_copilot_mod = Mock()
         mock_copilot_mod.__file__ = "/fake/site-packages/copilot/__init__.py"
@@ -395,10 +389,12 @@ class TestSingleton:
                         with patch("shutil.which", return_value="/usr/bin/copilot"):
                             result = _find_copilot_cli({})
                             assert result is not None
-                            # Use Path for cross-platform comparison
-                            expected_parts = ["fake", "site-packages", "copilot", "bin", "copilot"]
-                            result_path = Path(result)
-                            assert all(part in result_path.parts for part in expected_parts)
+                            # Path separators differ by OS (\\ on Windows, / on Unix)
+                            # Check for path components instead of exact string
+                            assert "fake" in result
+                            assert "site-packages" in result
+                            assert "copilot" in result
+                            assert "bin" in result
 
     def test_cli_falls_back_to_path_when_sdk_missing(self):
         """When SDK bundled binary doesn't exist, fall back to PATH."""

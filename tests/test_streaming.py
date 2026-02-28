@@ -512,8 +512,9 @@ class TestStreamingErrors:
     @pytest.mark.asyncio
     async def test_streaming_timeout(self, streaming_provider):
         """Test timeout handling in streaming mode."""
-        from amplifier_module_provider_github_copilot.exceptions import CopilotTimeoutError
+        from amplifier_core.llm_errors import LLMTimeoutError
 
+        # NOTE: Provider wraps CopilotTimeoutError -> LLMTimeoutError for kernel compatibility
         # Session that emits a delta but never reaches idle — will trigger timeout
         # Key: events must be emitted asynchronously to allow timeout to fire
         class NeverIdleSession(MockStreamingSession):
@@ -565,11 +566,8 @@ class TestStreamingErrors:
                 with patch(
                     "copilot.generated.session_events.SessionEventType", MockSessionEventType
                 ):
-                    from amplifier_core.llm_errors import LLMTimeoutError
-
                     request = {"messages": [{"role": "user", "content": "Test"}]}
 
-                    # Provider wraps CopilotTimeoutError in LLMTimeoutError
                     with pytest.raises(LLMTimeoutError):
                         await streaming_provider.complete(request)
 
