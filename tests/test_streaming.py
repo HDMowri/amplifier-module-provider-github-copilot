@@ -455,7 +455,11 @@ class TestStreamingErrors:
 
     @pytest.fixture
     def streaming_provider(self, mock_coordinator):
-        """Create provider configured for streaming with short timeout."""
+        """Create provider configured for streaming with short timeout.
+
+        IMPORTANT: max_retries=0 to avoid retry delays in timeout tests.
+        Without this, retry exponential backoff adds ~10 seconds per test.
+        """
         return CopilotSdkProvider(
             api_key=None,
             config={
@@ -464,6 +468,7 @@ class TestStreamingErrors:
                 "thinking_timeout": 1.0,  # Also short - opus triggers reasoning path
                 "use_streaming": True,
                 "debug": False,
+                "max_retries": 0,  # CRITICAL: Disable retries to avoid delays
             },
             coordinator=mock_coordinator,
         )

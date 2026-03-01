@@ -415,6 +415,7 @@ class TestGemini3ProSaturation:
         """Test that Gemini avoids tool call text leakage."""
         # Gemini occasionally leaks tool intent into text for "describe" prompts
         # This is LLM behavioral variance, not a provider bug
+        # Last verified: 2026-02-28 - still reproduces
         if tag == "25_describe":
             pytest.xfail(
                 "Gemini 3 Pro sometimes outputs tool plan as text before structured call"

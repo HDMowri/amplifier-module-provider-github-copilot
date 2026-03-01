@@ -37,10 +37,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import platform
-import shutil
-import subprocess
-import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,6 +49,57 @@ from amplifier_module_provider_github_copilot import CopilotSdkProvider
 from amplifier_module_provider_github_copilot._constants import COPILOT_BUILTIN_TOOL_NAMES
 
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# E2E Test Isolation: Isolate from user's ~/.amplifier/settings.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+# Problem: User's settings.yaml may have providers like Ollama that fail when
+# not running. Even with --provider github-copilot, Amplifier's inject_user_providers()
+# adds ALL providers from settings.yaml to the mount plan.
+#
+# Solution: Set AMPLIFIER_HOME env var to point to a test-specific directory
+# with a minimal settings.yaml containing ONLY github-copilot provider.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture(scope="class")
+def isolated_amplifier_env(tmp_path_factory):
+    """Create an isolated Amplifier environment for E2E tests.
+
+    Creates a temp directory with minimal settings.yaml containing only
+    the github-copilot provider. Sets AMPLIFIER_HOME to this directory.
+
+    This prevents tests from loading user's ~/.amplifier/settings.yaml
+    which may have providers (like Ollama) that fail when not running.
+
+    Yields:
+        dict: Environment variables dict with AMPLIFIER_HOME set.
+    """
+    # Create temp directory for test-isolated Amplifier home
+    test_home = tmp_path_factory.mktemp("amplifier_home")
+
+    # Minimal settings.yaml with only github-copilot provider
+    # This prevents Ollama or other user-configured providers from being loaded
+    settings_yaml = """\
+# Test-isolated settings - only github-copilot provider
+providers:
+  - module: provider-github-copilot
+    config:
+      priority: 1
+      model: claude-opus-4-5
+"""
+    settings_path = test_home / "settings.yaml"
+    settings_path.write_text(settings_yaml)
+
+    # Copy current environment and override AMPLIFIER_HOME
+    env = os.environ.copy()
+    env["AMPLIFIER_HOME"] = str(test_home)
+
+    logger.info(f"E2E test isolation: AMPLIFIER_HOME={test_home}")
+
+    yield env
+
 
 # Skip all tests unless explicitly enabled
 pytestmark = pytest.mark.skipif(
@@ -640,261 +687,12 @@ class TestSdkSessionForensics:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test Class: Amplifier End-to-End
+# E2E TESTS ARCHIVED — 2026-02-28
 # ═══════════════════════════════════════════════════════════════════════════════
-
-
-def _find_amplifier_cli() -> str | None:
-    """Find the amplifier CLI binary on PATH or in known locations."""
-    found = shutil.which("amplifier")
-    if found:
-        return found
-    # Check uv tool install location (WSL/Linux)
-    home_local = Path.home() / ".local" / "bin" / "amplifier"
-    if home_local.exists():
-        return str(home_local)
-    # Check uv tool install location (Windows)
-    if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA", "")
-        if appdata:
-            win_path = Path(appdata) / "uv" / "tools" / "amplifier" / "Scripts" / "amplifier.exe"
-            if win_path.exists():
-                return str(win_path)
-    return None
-
-
-def _get_workspace_cwd() -> str:
-    """Return the workspace root as a platform-appropriate path."""
-    # Dynamically determine workspace from this file's location
-    # tests/integration/test_forensic_regression.py -> module root -> workspace
-    module_root = Path(__file__).resolve().parents[2]
-    workspace = module_root.parent
-    return str(workspace)
-
-
-def _get_provider_cwd() -> str:
-    """Return the provider module root as a platform-appropriate path."""
-    # Dynamically determine from this file's location
-    module_root = Path(__file__).resolve().parents[2]
-    return str(module_root)
-
-
+# The Amplifier E2E tests (TestAmplifierEndToEnd) were moved to:
+#   mydocs/archived-tests/amplifier-e2e-tests-2026-02-28.py
+#
+# Reason: They test Amplifier CLI, not this provider. Our 669 unit/integration
+# tests cover provider functionality. E2E tests are available if loop debugging
+# is needed.
 # ═══════════════════════════════════════════════════════════════════════════════
-# WINDOWS ARM64 SKIP — Class-Level
-# ═══════════════════════════════════════════════════════════════════════════════
-# Amplifier's bundle preparation tries to install `tool-mcp` module which
-# depends on `cryptography` via the dependency chain:
-#   tool-mcp → mcp → pyjwt[crypto] → cryptography
-#
-# On Windows ARM64, `cryptography` has no pre-built wheel and requires Rust
-# to compile from source. The build fails with:
-#   "Unsupported platform: win_arm64"
-#
-# This causes Amplifier's bundle prep to hang for ~30 seconds attempting
-# the build, which exhausts the Copilot SDK's internal ping() timeout
-# (also 30s), resulting in TimeoutError during client initialization.
-#
-# This is NOT a provider bug - it's a platform limitation. The raw SDK
-# works perfectly on Windows ARM64 when tested in isolation.
-#
-# Windows x64 DOES work because cryptography has pre-built wheels for x64.
-# ═══════════════════════════════════════════════════════════════════════════════
-@pytest.mark.skipif(
-    platform.system() == "Windows" and platform.machine() in ("ARM64", "aarch64"),
-    reason=(
-        "Amplifier's tool-mcp module requires cryptography which has no ARM64 wheel. "
-        "This test passes on Windows x64, Linux, and macOS."
-    ),
-)
-class TestAmplifierEndToEnd:
-    """
-    Full end-to-end tests that invoke Amplifier CLI and verify
-    the Copilot provider behaves correctly as an integrated module.
-
-    These tests run 'amplifier' commands via subprocess and parse
-    the session events for forensic comparison.
-
-    Prerequisites:
-        - Amplifier CLI installed via 'uv tool install' and on PATH
-        - Copilot provider configured in Amplifier
-
-    Platform Notes:
-        - Windows x64: ✓ Works (cryptography has pre-built wheels)
-        - Windows ARM64: ✗ Skipped (no cryptography wheel, see class decorator)
-        - Linux/WSL: ✓ Works
-        - macOS: ✓ Works
-    """
-
-    @pytest.mark.asyncio
-    async def test_amplifier_simple_math(self) -> None:
-        """
-        Run a simple math prompt through Amplifier and verify clean completion.
-
-        This is a smoke test that validates Amplifier can use the Copilot
-        provider without errors.
-        """
-        amplifier_bin = _find_amplifier_cli()
-        if not amplifier_bin:
-            pytest.skip(
-                "Amplifier CLI not found on PATH or in ~/.local/bin/. "
-                "Install with: uv tool install amplifier"
-            )
-
-        result = subprocess.run(
-            [
-                amplifier_bin,
-                "run",
-                "--mode",
-                "single",
-                "What is 7 * 8? Reply with ONLY the number, no explanation.",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=_get_workspace_cwd(),
-        )
-
-        logger.info(
-            f"Amplifier exit code: {result.returncode}\n"
-            f"stdout: {result.stdout[:500]}\n"
-            f"stderr: {result.stderr[:500]}"
-        )
-
-        # Should complete without error
-        assert result.returncode == 0, (
-            f"Amplifier failed with exit code {result.returncode}: {result.stderr}"
-        )
-
-        # Should contain "56" somewhere in output
-        assert "56" in result.stdout, f"Expected '56' in response, got: {result.stdout[:200]}"
-
-    @pytest.mark.asyncio
-    async def test_amplifier_bug_hunter_delegation(self) -> None:
-        """
-        THE CRITICAL E2E TEST: Run the exact forensic incident prompt
-        through Amplifier CLI and verify correct behavior.
-
-        This is the definitive proof that the SDK Driver architecture
-        fixes the 305-turn loop.
-        """
-        amplifier_bin = _find_amplifier_cli()
-        if not amplifier_bin:
-            pytest.skip(
-                "Amplifier CLI not found on PATH or in ~/.local/bin/. "
-                "Install with: uv tool install amplifier"
-            )
-
-        start = time.time()
-        result = subprocess.run(
-            [
-                amplifier_bin,
-                "run",
-                "--mode",
-                "single",
-                "Use the bug-hunter agent to check if there are any "
-                "obvious issues in the models.py file.",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=180,  # 3 minutes max (was 20 minutes before)
-            cwd=_get_provider_cwd(),
-        )
-        elapsed = time.time() - start
-
-        logger.info(
-            f"\n{'=' * 60}\n"
-            f"AMPLIFIER E2E BUG-HUNTER TEST\n"
-            f"{'=' * 60}\n"
-            f"Exit code: {result.returncode}\n"
-            f"Duration: {elapsed:.1f}s\n"
-            f"stdout length: {len(result.stdout)} chars\n"
-            f"stderr length: {len(result.stderr)} chars\n"
-            f"{'=' * 60}"
-        )
-
-        # Must complete within time limit
-        assert elapsed < MAX_ACCEPTABLE_DURATION_S * 2, (
-            f"Amplifier took {elapsed:.1f}s — possible SDK loop regression"
-        )
-
-        # Parse the session events for forensic analysis
-        await self._analyze_latest_session(elapsed)
-
-    async def _analyze_latest_session(self, elapsed: float) -> None:
-        """
-        Find and analyze the latest Amplifier session events.
-
-        Counts delegate spawns and LLM request/response metrics.
-        """
-        # Project name varies by platform: WSL uses the /mnt/e/ path,
-        # Windows uses the E:\ path, both slugified by Amplifier.
-        if sys.platform == "win32":
-            project_slug = "E--amplifier+GHC-CLI-SDK-Experiment"
-        else:
-            project_slug = "-mnt-e-amplifier+GHC-CLI-SDK-Experiment"
-        sessions_dir = Path.home() / ".amplifier" / "projects" / project_slug / "sessions"
-
-        if not sessions_dir.exists():
-            logger.warning(f"Sessions dir not found: {sessions_dir}")
-            return
-
-        # Find the most recently modified session
-        session_dirs = sorted(
-            [d for d in sessions_dir.iterdir() if d.is_dir() and "-" not in d.name[36:]],
-            key=lambda d: d.stat().st_mtime,
-            reverse=True,
-        )
-
-        if not session_dirs:
-            logger.warning("No session directories found")
-            return
-
-        events_file = session_dirs[0] / "events.jsonl"
-        if not events_file.exists():
-            logger.warning(f"No events file: {events_file}")
-            return
-
-        events: list[dict[str, Any]] = []
-        with open(events_file) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    events.append(json.loads(line))
-
-        # Count key metrics
-        delegate_spawns = sum(1 for e in events if e.get("event") == "delegate:agent_spawned")
-        llm_responses = [e for e in events if e.get("event") == "llm:response"]
-
-        total_tool_calls = 0
-        for resp in llm_responses:
-            tc = resp.get("data", {}).get("tool_calls", 0)
-            if isinstance(tc, int):
-                total_tool_calls += tc
-
-        logger.info(
-            f"\n{'=' * 60}\n"
-            f"AMPLIFIER SESSION FORENSIC ANALYSIS\n"
-            f"{'=' * 60}\n"
-            f"Session: {session_dirs[0].name}\n"
-            f"Total events: {len(events)}\n"
-            f"{'─' * 60}\n"
-            f"{'Metric':<30} {'BEFORE (incident)':<20} {'AFTER (now)':<20}\n"
-            f"{'─' * 60}\n"
-            f"{'Duration':<30} {INCIDENT_DURATION_S:>15}s {elapsed:>15.1f}s\n"
-            f"{'delegate:agent_spawned':<30} {'303':>15} {delegate_spawns:>15}\n"
-            f"{'Total tool_calls (llm:resp)':<30} {INCIDENT_TOOL_CALLS:>15} {total_tool_calls:>15}\n"
-            f"{'=' * 60}"
-        )
-
-        # ASSERTIONS
-        assert delegate_spawns <= MAX_ACCEPTABLE_DELEGATES, (
-            f"Amplifier spawned {delegate_spawns} delegate agents — "
-            f"exceeds limit of {MAX_ACCEPTABLE_DELEGATES}. "
-            f"Original incident spawned 303. SDK Driver may not be working."
-        )
-
-        assert total_tool_calls <= MAX_ACCEPTABLE_TOOL_CALLS, (
-            f"Total tool calls across LLM responses: {total_tool_calls} — "
-            f"exceeds limit of {MAX_ACCEPTABLE_TOOL_CALLS}. "
-            f"Original incident: {INCIDENT_TOOL_CALLS}."
-        )

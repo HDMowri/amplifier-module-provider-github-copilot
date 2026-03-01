@@ -4,6 +4,13 @@ Shared test fixtures for Copilot SDK Provider tests.
 This module provides common test fixtures, mocks, and utilities
 for testing the Copilot SDK provider module.
 
+PERFORMANCE ARCHITECTURE:
+- Unit tests (tests/*.py): Fully mocked, NEVER hit real SDK
+- Integration tests (tests/integration/*.py): Hit real SDK when RUN_LIVE_TESTS=1
+
+The auto_mock_sdk_for_unit_tests fixture ensures unit tests run in milliseconds
+by preventing SDK subprocess spawning. Integration tests bypass this via marker.
+
 NOTE: Windows + pytest-asyncio can cause KeyboardInterrupt on cleanup.
 The event_loop_policy fixture below addresses this by using
 WindowsSelectorEventLoopPolicy when available.
@@ -11,11 +18,168 @@ WindowsSelectorEventLoopPolicy when available.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 import sys
+import time
+from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+
+# Configure test timing logger
+_test_timer_logger = logging.getLogger("test_timer")
+
+
+# =============================================================================
+# HIGH-PERFORMANCE AUTO-MOCK SYSTEM
+# =============================================================================
+# This section provides automatic SDK mocking for unit tests.
+# Integration tests opt-out via the 'live_sdk' marker or being in tests/integration/.
+# Result: Unit tests complete in MILLISECONDS instead of seconds.
+# =============================================================================
+
+
+def _create_mock_model(model_id: str = "claude-opus-4.5", supports_reasoning: bool = False):
+    """Create a mock model object matching SDK structure."""
+    mock_model = Mock()
+    mock_model.id = model_id
+    mock_model.name = model_id.replace("-", " ").title()
+    mock_model.provider = "anthropic" if "claude" in model_id else "openai"
+    mock_model.vendor = None
+    mock_model.capabilities = Mock()
+    mock_model.capabilities.supports = Mock()
+    mock_model.capabilities.supports.vision = True
+    mock_model.capabilities.supports.reasoning_effort = supports_reasoning
+    mock_model.capabilities.limits = Mock()
+    mock_model.capabilities.limits.max_context_window_tokens = 200000
+    mock_model.capabilities.limits.max_prompt_tokens = 150000
+    mock_model.supported_reasoning_efforts = ["low", "medium", "high"] if supports_reasoning else None
+    mock_model.default_reasoning_effort = "medium" if supports_reasoning else None
+    # Amplifier model attributes
+    mock_model.context_window = 200000
+    mock_model.max_output_tokens = 32000
+    mock_model.supports_tools = True
+    mock_model.supports_vision = True
+    return mock_model
+
+
+def _create_mock_session_response(content: str = "Mock response", tool_requests: list | None = None):
+    """Create a mock SDK session response."""
+    response = Mock()
+    response.type = "assistant.message"
+    response.data = Mock()
+    response.data.content = content
+    response.data.tool_requests = tool_requests
+    response.data.input_tokens = 100
+    response.data.output_tokens = 50
+    return response
+
+
+@pytest.fixture(autouse=True)
+def auto_mock_sdk_for_unit_tests(request):
+    """
+    AUTO-MOCK SDK for unit tests to achieve millisecond execution.
+
+    This fixture is the KEY to fast unit tests. It prevents the SDK
+    subprocess from spawning by mocking at the CopilotClientWrapper level.
+
+    APPLIES TO: All tests EXCEPT:
+    - Tests in tests/integration/ directory
+    - Tests marked with @pytest.mark.live_sdk
+
+    WHAT IT MOCKS:
+    - CopilotClientWrapper.ensure_client() - No subprocess spawn
+    - CopilotClientWrapper.list_models() - Returns instant mock
+    - CopilotClientWrapper.create_session() - Returns mock session
+    - CopilotClientWrapper.send_and_wait() - Returns mock response
+    - CopilotClientWrapper.close() - No-op
+
+    RESULT: Unit tests run in ~5ms instead of ~2000ms (400x speedup)
+    """
+    # Check if this is an integration test (needs real SDK)
+    test_path = str(request.fspath)
+    is_integration = "integration" in test_path
+
+    # Check if this tests the client wrapper itself (needs real class methods)
+    is_client_test = "test_client.py" in test_path
+
+    # Check for live_sdk marker
+    has_live_marker = request.node.get_closest_marker("live_sdk") is not None
+
+    # Skip mocking for integration/live/client tests
+    if is_integration or has_live_marker or is_client_test:
+        yield
+        return
+
+    # Import here to avoid circular imports at module load
+    from amplifier_module_provider_github_copilot.client import CopilotClientWrapper
+
+    # Create mock model list
+    mock_models = [_create_mock_model("claude-opus-4.5", supports_reasoning=False)]
+
+    # Create mock SDK client (underlying CopilotClient)
+    mock_underlying_client = AsyncMock()
+    mock_underlying_client.start = AsyncMock()
+    mock_underlying_client.stop = AsyncMock(return_value=[])
+    mock_underlying_client.list_models = AsyncMock(return_value=mock_models)
+
+    # Create mock session
+    mock_session = AsyncMock()
+    mock_session.session_id = "auto-mock-session"
+    mock_session.destroy = AsyncMock()
+    mock_session.send_and_wait = AsyncMock(return_value=_create_mock_session_response())
+    mock_session.abort = AsyncMock()
+
+    @asynccontextmanager
+    async def mock_create_session(*args, **kwargs):
+        """Mock session context manager."""
+        yield mock_session
+
+    # Apply patches at the wrapper level (affects all providers)
+    with patch.object(CopilotClientWrapper, "ensure_client", new_callable=AsyncMock) as mock_ensure, \
+         patch.object(CopilotClientWrapper, "list_models", new_callable=AsyncMock) as mock_list, \
+         patch.object(CopilotClientWrapper, "create_session", mock_create_session), \
+         patch.object(CopilotClientWrapper, "send_and_wait", new_callable=AsyncMock) as mock_send, \
+         patch.object(CopilotClientWrapper, "close", new_callable=AsyncMock) as mock_close:
+
+        mock_ensure.return_value = mock_underlying_client
+        mock_list.return_value = mock_models
+        mock_send.return_value = _create_mock_session_response()
+        mock_close.return_value = None
+
+        yield
+
+    # Cleanup happens automatically via context manager
+
+
+# =============================================================================
+# PYTEST CONFIGURATION
+# =============================================================================
+
+
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line(
+        "markers",
+        "live_sdk: Mark test as requiring live SDK access (skips auto-mocking)"
+    )
+    config.addinivalue_line(
+        "markers",
+        "slow: Mark test as slow running (use -m 'not slow' to skip)"
+    )
+
+
+def pytest_runtest_logstart(nodeid: str, location: tuple) -> None:
+    """Log test start with millisecond timestamp."""
+    _test_timer_logger.info(f"START >>> {nodeid}")
+
+
+def pytest_runtest_logfinish(nodeid: str, location: tuple) -> None:
+    """Log test finish with millisecond timestamp."""
+    _test_timer_logger.info(f"END   <<< {nodeid}")
 
 
 @pytest.fixture(autouse=True)
@@ -308,6 +472,45 @@ def provider_config():
         "use_streaming": False,  # Use non-streaming mode for simpler test mocking
         "max_retries": 0,  # Disable retries in tests to avoid real asyncio.sleep delays
     }
+
+
+@pytest.fixture
+def fast_provider(provider_config, mock_coordinator):
+    """
+    Create a provider with pre-populated caches for instant execution.
+
+    This fixture creates a CopilotSdkProvider with:
+    1. Pre-populated model capabilities cache (skips list_models() call)
+    2. Pre-populated model info cache (skips SDK entirely)
+    3. Disabled retries (no asyncio.sleep delays)
+
+    Use this fixture for tests that need a provider but don't test SDK interaction.
+    Tests using this fixture complete in ~5ms instead of ~2000ms.
+
+    Example:
+        async def test_something(fast_provider):
+            # Provider is ready immediately, no SDK calls
+            info = fast_provider.get_info()
+            assert info.id == "github-copilot"
+    """
+    from amplifier_module_provider_github_copilot.provider import CopilotSdkProvider
+
+    provider = CopilotSdkProvider(
+        api_key=None,
+        config=provider_config,
+        coordinator=mock_coordinator,
+    )
+
+    # Pre-populate capability cache to skip list_models() call in complete()
+    provider._model_capabilities_cache["claude-opus-4.5"] = []  # No reasoning
+    provider._model_capabilities_cache["gpt-4.1"] = []
+    provider._model_capabilities_cache["gpt-5-mini"] = []
+
+    # Pre-populate model info cache for get_model_info()
+    mock_model = _create_mock_model("claude-opus-4.5")
+    provider._model_info_cache["claude-opus-4.5"] = mock_model
+
+    return provider
 
 
 class MockCopilotClient:

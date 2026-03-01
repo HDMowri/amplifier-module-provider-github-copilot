@@ -100,3 +100,10 @@ investigations/
 mydocs
 run_parallel_tests.ps1
 test_results.txt
+
+# Test virtual environments
+.test-venv-win/
+.test-venv-wsl/
+
+# Test artifacts (auto-generated, local-only)
+tests/integration/acceptance_performance.json

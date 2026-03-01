@@ -72,6 +72,12 @@ select = ["E", "F", "W", "I", "UP", "B", "C4"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+# Logging with millisecond timestamps for precise timing analysis
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s.%(msecs)03d | %(levelname)-5s | %(name)s | %(message)s"
+log_cli_date_format = "%H:%M:%S"
+
 # =============================================================================
 # Coverage Configuration
 # =============================================================================
