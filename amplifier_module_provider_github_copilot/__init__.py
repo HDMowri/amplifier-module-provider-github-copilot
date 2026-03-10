@@ -40,6 +40,23 @@ Prerequisites:
 
 from __future__ import annotations
 
+# Eager dependency check: ensure github-copilot-sdk is installed.
+# All SDK imports in this module are lazy (inside function bodies) so the module
+# would otherwise import successfully without the SDK.  That tricks Amplifier's
+# provider discovery into thinking the module is fully functional, which prevents
+# the automatic dependency-installation fallback from ever running.
+# Using importlib.metadata avoids importing the SDK itself at module load time.
+from importlib.metadata import PackageNotFoundError as _PkgNotFoundError
+from importlib.metadata import version as _pkg_version
+
+try:
+    _pkg_version("github-copilot-sdk")
+except _PkgNotFoundError as _e:
+    raise ImportError(
+        "Required dependency 'github-copilot-sdk' is not installed. "
+        "Install with:  pip install 'github-copilot-sdk>=0.1.32,<0.2.0'"
+    ) from _e
+
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable

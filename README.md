@@ -227,7 +227,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk>=0.1.0,<0.2.0`
+- `github-copilot-sdk>=0.1.32,<0.2.0`
 
 > **Note:** The `github-copilot-sdk` is installed automatically when you run 
 > `amplifier provider install github-copilot`. It is NOT bundled with the main 
