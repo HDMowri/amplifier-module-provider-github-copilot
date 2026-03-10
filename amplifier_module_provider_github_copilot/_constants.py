@@ -167,6 +167,7 @@ COPILOT_BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
         "search_code_subagent",  # Search: 2026-02-16 binary analysis
         "github-mcp-server-web_search",  # Search: 2026-02-16 binary analysis (MCP)
         "task_complete",  # Task: 2026-02-17 forensic session 1541c502
+        "apply_patch",  # File ops: 2026-03-09 SDK 0.1.30+ enforces overridesBuiltInTool
     }
 )
 
@@ -275,6 +276,7 @@ BUILTIN_TO_AMPLIFIER_CAPABILITY: dict[str, frozenset[str]] = {
     "report_progress": frozenset({"todo"}),  # Partial: maps to todo for task tracking
     "fetch_copilot_cli_documentation": frozenset(),  # CLI-specific, no equivalent
     "task_complete": frozenset({"todo"}),  # Task completion: maps to todo
+    "apply_patch": frozenset({"apply_patch"}),  # File ops: SDK 0.1.30+ built-in
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -49,6 +49,7 @@ class TestOverridesBuiltInToolFlag:
         "grep",  # tool-search exposes grep
         "web_fetch",  # tool-web exposes web_fetch
         "web_search",  # tool-web exposes web_search
+        "apply_patch",  # tool-filesystem exposes apply_patch
     ]
 
     @pytest.fixture
