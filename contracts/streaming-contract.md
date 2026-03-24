@@ -175,10 +175,51 @@ def assemble_response(accumulator: StreamAccumulator) -> ChatResponse:
 
 ---
 
+## StreamingChatResponse
+
+The `StreamingChatResponse` extends `ChatResponse` to support real-time streaming UI.
+
+### Dual-Type System
+
+| Field | Purpose | Types |
+|-------|---------|-------|
+| `content` | Context persistence | `TextBlock`, `ThinkingBlock`, `ToolCall` (message_models, Pydantic) |
+| `content_blocks` | Streaming UI events | `TextContent`, `ThinkingContent`, `ToolCallContent` (content_models, dataclass) |
+
+Both fields represent the same content but serve different consumers:
+- `content` → stored in conversation context by orchestrator
+- `content_blocks` → consumed by streaming orchestrator for UI events, then discarded
+
+### MUST Constraints
+
+1. **MUST** extend `ChatResponse` (kernel compatibility)
+2. **MUST** populate `content_blocks` with content_models types
+3. **MUST** populate `content` with message_models types (per existing contract)
+4. **MUST** set `content_blocks` to `None` when no content (not empty list)
+
+### Definition
+
+```python
+from amplifier_core import ChatResponse, TextContent, ThinkingContent, ToolCallContent
+
+
+class StreamingChatResponse(ChatResponse):
+    """ChatResponse with content_blocks for streaming UI compatibility."""
+    
+    content_blocks: list[TextContent | ThinkingContent | ToolCallContent] | None = None
+    text: str | None = None
+```
+
+---
+
 ## Test Anchors
 
 | Anchor | Clause |
 |--------|--------|
+| `streaming-contract:StreamingResponse:MUST:1` | Extends ChatResponse |
+| `streaming-contract:StreamingResponse:MUST:2` | content_blocks uses content_models types |
+| `streaming-contract:StreamingResponse:MUST:3` | content uses message_models types |
+| `streaming-contract:StreamingResponse:MUST:4` | content_blocks is None when empty |
 | `streaming-contract:ContentTypes:MUST:1` | Uses kernel content types |
 | `streaming-contract:Accumulation:MUST:1` | Deltas accumulated in order |
 | `streaming-contract:Accumulation:MUST:2` | Block boundaries maintained |

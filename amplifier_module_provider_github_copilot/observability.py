@@ -115,8 +115,7 @@ def load_observability_config() -> ObservabilityConfig:
             yaml_text = config_path.read_text(encoding="utf-8")
         else:
             logger.warning(
-                "[OBSERVABILITY] Config not found via importlib.resources or path. "
-                "Using defaults."
+                "[OBSERVABILITY] Config not found via importlib.resources or path. Using defaults."
             )
             return _default_observability_config()
 

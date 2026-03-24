@@ -6,15 +6,21 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import yaml
 
+# Import ChatResponse at module level for subclass definition
+# Contract: streaming-contract:StreamingResponse:MUST:1
+from amplifier_core import (
+    ChatResponse,
+    TextContent,
+    ThinkingContent,
+    ToolCallContent,
+)
+
 from .error_translation import ConfigurationError
 from .sdk_adapter.extract import extract_event_fields
-
-if TYPE_CHECKING:
-    from amplifier_core import ChatResponse
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +30,7 @@ __all__ = [
     "DomainEvent",
     "AccumulatedResponse",
     "StreamingAccumulator",
+    "StreamingChatResponse",
     "EventConfig",
     "MAX_EXTRACTION_DEPTH",
     "load_event_config",
@@ -31,6 +38,24 @@ __all__ = [
     "extract_response_content",
     "translate_event",
 ]
+
+
+class StreamingChatResponse(ChatResponse):
+    """ChatResponse with content_blocks for streaming UI compatibility.
+
+    The loop-streaming orchestrator checks `response.content_blocks` to emit
+    CONTENT_BLOCK_START and CONTENT_BLOCK_END events for real-time UI updates.
+
+    Attributes:
+        content_blocks: List of streaming content types for UI event emission.
+            Uses content_models types (TextContent, ThinkingContent, ToolCallContent).
+        text: Convenience field with combined text content.
+
+    Contract: streaming-contract:StreamingResponse:MUST:1-4
+    """
+
+    content_blocks: list[TextContent | ThinkingContent | ToolCallContent] | None = None
+    text: str | None = None
 
 
 class DomainEventType(Enum):
@@ -125,46 +150,65 @@ class StreamingAccumulator:
             is_complete=self.is_complete,
         )
 
-    def to_chat_response(self) -> "ChatResponse":
-        """Convert accumulated response to kernel ChatResponse.
+    def to_chat_response(self) -> "StreamingChatResponse":
+        """Convert accumulated response to StreamingChatResponse.
 
-        IMPORTANT: Uses TextBlock/ThinkingBlock (Pydantic from message_models),
-        NOT TextContent/ThinkingContent (dataclass from content_models).
+        Builds two content representations:
+        - content: Uses TextBlock/ThinkingBlock (Pydantic from message_models)
+          for context persistence.
+        - content_blocks: Uses TextContent/ThinkingContent/ToolCallContent
+          (dataclass from content_models) for streaming UI events.
 
         Returns:
-            ChatResponse with content blocks, tool_calls, usage, and finish_reason.
+            StreamingChatResponse with content, content_blocks, tool_calls,
+            usage, finish_reason, and text convenience field.
 
+        Contract: streaming-contract:StreamingResponse:MUST:1-4
         """
         from amplifier_core import (
-            ChatResponse,
             TextBlock,
             ThinkingBlock,
             ToolCall,
+            ToolCallContent,
             Usage,
         )
 
+        # Build content list (Pydantic types for context persistence)
         content: list[Any] = []
+        # Build content_blocks list (dataclass types for streaming UI)
+        content_blocks: list[TextContent | ThinkingContent | ToolCallContent] = []
 
-        # Add text content using Pydantic TextBlock
+        # Add text content using both type systems
         if self.text_content:
             content.append(TextBlock(text=self.text_content))
+            content_blocks.append(TextContent(text=self.text_content))
 
-        # Add thinking content using Pydantic ThinkingBlock
+        # Add thinking content using both type systems
         if self.thinking_content:
             content.append(ThinkingBlock(thinking=self.thinking_content))
+            content_blocks.append(ThinkingContent(text=self.thinking_content))
 
-        # Convert tool calls to kernel ToolCall
+        # Convert tool calls to kernel ToolCall and ToolCallContent
         tool_calls: list[Any] | None = None
         if self.tool_calls:
             tool_calls = []
             for tc in self.tool_calls:
-                tool_calls.append(
-                    ToolCall(
+                tool_call = ToolCall(
+                    id=tc.get("id", ""),
+                    name=tc.get("name", ""),
+                    arguments=tc.get("arguments", {})
+                    if isinstance(tc.get("arguments"), dict)
+                    else {},
+                )
+                tool_calls.append(tool_call)
+                # Also add to content_blocks for streaming UI
+                content_blocks.append(
+                    ToolCallContent(
                         id=tc.get("id", ""),
                         name=tc.get("name", ""),
                         arguments=tc.get("arguments", {})
                         if isinstance(tc.get("arguments"), dict)
-                        else {},
+                        else None,
                     )
                 )
 
@@ -177,11 +221,15 @@ class StreamingAccumulator:
                 total_tokens=self.usage.get("total_tokens", 0),
             )
 
-        return ChatResponse(
+        # Contract: content_blocks is None when empty (not empty list)
+        # streaming-contract:StreamingResponse:MUST:4
+        return StreamingChatResponse(
             content=content,  # type: ignore[arg-type]
             tool_calls=tool_calls,
             usage=usage,
             finish_reason=self.finish_reason,
+            content_blocks=content_blocks if content_blocks else None,
+            text=self.text_content or None,
         )
 
 

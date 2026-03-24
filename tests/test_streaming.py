@@ -575,3 +575,252 @@ class TestExtractContentBlockSkipsToolCalls:
         # Should preserve text
         assert "I'll run a command" in result
         assert "Command completed" in result
+
+
+# ============================================================================
+# StreamingChatResponse tests
+# Contract: streaming-contract:StreamingResponse:MUST:1-4
+# ============================================================================
+
+
+class TestStreamingChatResponse:
+    """Tests for StreamingChatResponse class.
+
+    Contract: streaming-contract:StreamingResponse:MUST:1-4
+    """
+
+    def test_streaming_response_extends_chat_response(self) -> None:
+        """StreamingChatResponse is a subclass of ChatResponse.
+
+        Contract: streaming-contract:StreamingResponse:MUST:1
+        """
+        from amplifier_core import ChatResponse
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            StreamingChatResponse,
+        )
+
+        assert issubclass(StreamingChatResponse, ChatResponse), (
+            "StreamingChatResponse must extend ChatResponse"
+        )
+
+    def test_streaming_response_instance_is_chat_response(self) -> None:
+        """StreamingChatResponse instance passes ChatResponse isinstance check.
+
+        Contract: streaming-contract:StreamingResponse:MUST:1
+        """
+        from amplifier_core import ChatResponse
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            StreamingChatResponse,
+        )
+
+        response = StreamingChatResponse(content=[])
+        assert isinstance(response, ChatResponse), (
+            "StreamingChatResponse instance must be ChatResponse instance"
+        )
+
+    def test_content_blocks_populated_with_text(self) -> None:
+        """content_blocks contains TextContent when text accumulated.
+
+        Contract: streaming-contract:StreamingResponse:MUST:2
+        """
+        from amplifier_core import TextContent
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Hello world"},
+                block_type="TEXT",
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        assert response.content_blocks is not None, "content_blocks should not be None"
+        assert len(response.content_blocks) == 1, "Should have one content block"
+        assert isinstance(response.content_blocks[0], TextContent), (
+            f"Expected TextContent, got {type(response.content_blocks[0]).__name__}"
+        )
+        assert response.content_blocks[0].text == "Hello world"
+
+    def test_content_blocks_populated_with_thinking(self) -> None:
+        """content_blocks contains ThinkingContent when thinking accumulated.
+
+        Contract: streaming-contract:StreamingResponse:MUST:2
+        """
+        from amplifier_core import ThinkingContent
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Let me think..."},
+                block_type="THINKING",
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        assert response.content_blocks is not None, "content_blocks should not be None"
+        assert len(response.content_blocks) == 1, "Should have one content block"
+        assert isinstance(response.content_blocks[0], ThinkingContent), (
+            f"Expected ThinkingContent, got {type(response.content_blocks[0]).__name__}"
+        )
+        assert response.content_blocks[0].text == "Let me think..."
+
+    def test_content_blocks_populated_with_tool_calls(self) -> None:
+        """content_blocks contains ToolCallContent when tools captured.
+
+        Contract: streaming-contract:StreamingResponse:MUST:2
+        """
+        from amplifier_core import ToolCallContent
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "tc1", "name": "read_file", "arguments": {"path": "test.py"}},
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "tool_use"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        assert response.content_blocks is not None, "content_blocks should not be None"
+        assert len(response.content_blocks) == 1, "Should have one content block"
+        assert isinstance(response.content_blocks[0], ToolCallContent), (
+            f"Expected ToolCallContent, got {type(response.content_blocks[0]).__name__}"
+        )
+        assert response.content_blocks[0].name == "read_file"
+
+    def test_text_field_convenience(self) -> None:
+        """text field contains combined text content.
+
+        Contract: streaming-contract:StreamingResponse:MUST:2
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Hello "},
+                block_type="TEXT",
+            )
+        )
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "world"},
+                block_type="TEXT",
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        assert response.text == "Hello world", f"Expected 'Hello world', got '{response.text}'"
+
+    def test_content_blocks_none_when_empty(self) -> None:
+        """content_blocks is None when no content (not empty list).
+
+        Contract: streaming-contract:StreamingResponse:MUST:4
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        assert response.content_blocks is None, (
+            f"content_blocks should be None when empty, got {response.content_blocks}"
+        )
+
+    def test_mixed_content_blocks(self) -> None:
+        """content_blocks contains all types when mixed content accumulated.
+
+        Contract: streaming-contract:StreamingResponse:MUST:2
+        """
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Response text"},
+                block_type="TEXT",
+            )
+        )
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Thinking..."},
+                block_type="THINKING",
+            )
+        )
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "tc1", "name": "bash", "arguments": {"cmd": "ls"}},
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "tool_use"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        assert response.content_blocks is not None
+        assert len(response.content_blocks) == 3
+
+        # Check types
+        types = [type(b).__name__ for b in response.content_blocks]
+        assert "TextContent" in types
+        assert "ThinkingContent" in types
+        assert "ToolCallContent" in types
