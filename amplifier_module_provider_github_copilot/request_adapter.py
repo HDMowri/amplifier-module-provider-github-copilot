@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from .sdk_adapter.types import CompletionRequest, extract_attachments_from_chat_request
+# Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
+from .sdk_adapter import CompletionRequest, extract_attachments_from_chat_request
 
 __all__ = [
     "convert_chat_request",

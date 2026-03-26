@@ -106,14 +106,55 @@ class StreamAccumulator:
 
 The provider MAY implement internal streaming callbacks for real-time UI updates. This is NOT part of the kernel protocol.
 
+### Progressive Streaming Events
+
+For real-time UI updates, the provider SHOULD emit `llm:content_block` events as content arrives:
+
+**SHOULD-1:** Provider SHOULD emit `llm:content_block` events for each content delta when coordinator has hooks.
+
+**SHOULD-2:** Provider SHOULD emit events asynchronously (fire-and-forget) to avoid blocking the SDK event handler.
+
+**SHOULD-3:** Provider SHOULD track pending emit tasks and clean up on provider close.
+
+**SHOULD-4:** Provider SHOULD gracefully skip emission when no coordinator or no hooks available.
+
+### Event Schema
+
 ```python
-# Internal implementation detail — not protocol
-async def _stream_completion(
+await coordinator.hooks.emit(
+    "llm:content_block",
+    {
+        "provider": "github-copilot",
+        "content": TextContent | ThinkingContent | ToolCallContent,
+    },
+)
+```
+
+### Implementation Pattern
+
+```python
+def _emit_streaming_content(
     self,
-    request: ChatRequest,
-    on_event: Callable[[ContentBlock], None] | None = None,
-) -> ChatResponse:
-    """Provider-internal streaming implementation."""
+    content: TextContent | ThinkingContent | ToolCallContent,
+) -> None:
+    """Emit streaming content for real-time UI updates.
+    
+    Fire-and-forget pattern: creates async task, doesn't block.
+    Contract: streaming-contract:ProgressiveStreaming:SHOULD:1-4
+    """
+    if not self._coordinator or not hasattr(self._coordinator, "hooks"):
+        return
+    
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(
+            self._emit_content_async(content),
+            name=f"emit_content_{id(content)}",
+        )
+        self._pending_emit_tasks.add(task)
+        task.add_done_callback(self._pending_emit_tasks.discard)
+    except RuntimeError:
+        pass  # No running loop - skip emission
 ```
 
 ---
@@ -143,6 +184,21 @@ def handle_tool_call_event(self, event: DomainEvent) -> None:
 
 ## Final Response Assembly
 
+### Finish Reason Normalization
+
+The `finish_reason` field MUST be normalized before returning to the orchestrator:
+
+| Condition | finish_reason | Rationale |
+|-----------|---------------|-----------|
+| Tool calls present | `"tool_use"` | Orchestrator must execute tools (ALWAYS overrides SDK) |
+| No tool calls, SDK sent finish_reason | preserve SDK value | Normal completion with SDK-provided reason |
+| No tool calls, no SDK finish_reason | `"end_turn"` | Default for text-only responses |
+| Error occurred | `"error"` | Error path |
+
+**MUST-5:** Provider MUST set `finish_reason="tool_use"` when `tool_calls` is non-empty, **regardless of what the SDK sent**.
+
+**Rationale:** The SDK may send `TURN_COMPLETE` with `finish_reason="stop"` even when there are tool_calls (e.g., in the deny+capture flow where the SDK completes normally after tool denial). The orchestrator relies on `finish_reason="tool_use"` to know that it should execute the captured tools and continue the agent loop. Returning "stop" causes premature exit to interactive mode.
+
 ```python
 from amplifier_core import TextBlock, ThinkingBlock, ToolCall
 
@@ -162,14 +218,24 @@ def assemble_response(accumulator: StreamAccumulator) -> ChatResponse:
         if thinking:
             content_blocks.append(ThinkingBlock(thinking=thinking))
     
+    tool_calls = [...]  # Convert to ToolCall list
     for tc in accumulator.tool_calls:
         content_blocks.append(tc)  # Already ToolCall
     
+    # CRITICAL: finish_reason normalization
+    # tool_calls ALWAYS override SDK finish_reason
+    if tool_calls:
+        finish_reason = "tool_use"  # Override any SDK value
+    elif not accumulator.finish_reason:
+        finish_reason = "end_turn"  # Default for text-only
+    else:
+        finish_reason = accumulator.finish_reason  # Preserve SDK value
+    
     return ChatResponse(
         content=content_blocks,
-        tool_calls=[...],  # ToolCall list
+        tool_calls=tool_calls,
         usage=accumulator.usage,
-        finish_reason=accumulator.finish_reason,
+        finish_reason=finish_reason,
     )
 ```
 
@@ -225,9 +291,14 @@ class StreamingChatResponse(ChatResponse):
 | `streaming-contract:Accumulation:MUST:2` | Block boundaries maintained |
 | `streaming-contract:ToolCapture:MUST:1` | Tool calls captured |
 | `streaming-contract:ToolCapture:MUST:2` | Tool calls in final response |
+| `streaming-contract:FinishReason:MUST:5` | finish_reason="tool_use" when tool_calls present |
 | `streaming-contract:Response:MUST:1` | Final response uses kernel types |
 | `streaming-contract:completion:MUST:1` | First stream yields before completion |
 | `streaming-contract:completion:MUST:2` | Completion includes all content |
+| `streaming-contract:ProgressiveStreaming:SHOULD:1` | Emit llm:content_block events |
+| `streaming-contract:ProgressiveStreaming:SHOULD:2` | Async fire-and-forget emission |
+| `streaming-contract:ProgressiveStreaming:SHOULD:3` | Track and clean up emit tasks |
+| `streaming-contract:ProgressiveStreaming:SHOULD:4` | Graceful skip when no coordinator |
 
 ---
 

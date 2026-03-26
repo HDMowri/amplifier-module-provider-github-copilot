@@ -15,10 +15,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from amplifier_module_provider_github_copilot.error_translation import (
-    LLMError,
-    ProviderUnavailableError,
-)
 from amplifier_module_provider_github_copilot.sdk_adapter.client import (
     CopilotClientWrapper,
 )
@@ -163,58 +159,5 @@ class TestRaceConditionFix:
 # =============================================================================
 # AC-3: Double Exception Translation Guard
 # =============================================================================
-
-
-class TestDoubleExceptionTranslation:
-    """Verify LLMError is not re-wrapped."""
-
-    @pytest.mark.asyncio
-    async def test_llm_error_not_double_wrapped(self) -> None:
-        """AC-3: LLMError raised in complete() must not be wrapped again."""
-        from amplifier_module_provider_github_copilot.provider import (
-            CompletionRequest,
-            complete,
-        )
-
-        # Arrange: Create a mock that raises LLMError
-        original_error = ProviderUnavailableError(
-            "Original error",
-            provider="github-copilot",
-        )
-
-        async def raise_llm_error(config: Any) -> Any:
-            raise original_error
-
-        request = CompletionRequest(prompt="test")
-
-        # Act & Assert: The original error should propagate unchanged
-        with pytest.raises(LLMError) as exc_info:
-            async for _ in complete(request, sdk_create_fn=raise_llm_error):
-                pass
-
-        # The raised error should be the original, not a wrapper
-        raised = exc_info.value
-        # Should be the same type, not wrapped in another LLMError
-        assert isinstance(raised, type(original_error)) or raised is original_error, (
-            f"LLMError was double-wrapped: got {type(raised).__name__}, "
-            f"expected {type(original_error).__name__}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_non_llm_error_gets_translated(self) -> None:
-        """AC-3: Non-LLMError exceptions must still be translated."""
-        from amplifier_module_provider_github_copilot.provider import (
-            CompletionRequest,
-            complete,
-        )
-
-        # Arrange: Create a mock that raises a non-LLM error
-        async def raise_generic_error(config: Any) -> Any:
-            raise ValueError("Some SDK error")
-
-        request = CompletionRequest(prompt="test")
-
-        # Act & Assert: Should be translated to an LLMError
-        with pytest.raises(LLMError):
-            async for _ in complete(request, sdk_create_fn=raise_generic_error):
-                pass
+# TestDoubleExceptionTranslation removed - migrated to test_behaviors.py
+# TestProductionPathWithMockClient::test_llm_error_not_double_wrapped (Issue #6)

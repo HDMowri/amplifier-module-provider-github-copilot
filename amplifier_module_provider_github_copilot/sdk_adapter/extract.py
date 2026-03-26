@@ -91,8 +91,11 @@ def extract_event_fields(sdk_event: Any) -> dict[str, Any]:
         if tool_name and "name" not in event_dict:
             event_dict["name"] = tool_name
 
+        # Tool arguments — MUST preserve empty dict for zero-parameter tools
+        # Contract: streaming-contract.md — tools MUST have arguments field
+        # Bug fix: `if arguments` dropped {} because bool({}) == False
         arguments = getattr(sdk_data, "arguments", None)
-        if arguments and "arguments" not in event_dict:
+        if arguments is not None and "arguments" not in event_dict:
             event_dict["arguments"] = arguments
 
         # Usage fields from nested data

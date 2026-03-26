@@ -248,8 +248,9 @@ The SDK has **three separate parameters** for tool configuration:
 
 1. **MUST** forward `ChatRequest.tools` to SDK session via `session_config["tools"]`
 2. **MUST** convert Amplifier `ToolSpec` objects to SDK-compatible objects with required attributes
-3. **MUST** set `available_tools: []` to disable SDK built-in tools (per deny-destroy.md)
-4. **MUST NOT** confuse `tools` (custom definitions) with `available_tools` (built-in allowlist)
+3. **MUST NOT** set `available_tools` parameter (per deny-destroy:ToolSuppression:MUST:1) — empty list disables ALL tools including user tools
+4. **MUST** set `overrides_built_in_tool=True` on all user tools (per deny-destroy:ToolSuppression:MUST:2)
+5. **MUST NOT** confuse `tools` (custom definitions) with `available_tools` (built-in allowlist)
 
 ### SDK Tool Format
 

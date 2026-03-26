@@ -3,6 +3,24 @@
 # SDK Reference: github-copilot-sdk SessionEventType enum
 version: "1.0"
 
+# Content event types for TTFT (time to first token) tracking
+# Contract: behaviors:Streaming:MUST:1
+# Any of these event types arriving starts the TTFT clock
+content_event_types:
+  - assistant.message_delta
+  - assistant.streaming_delta
+  - assistant.reasoning_delta
+
+# Streaming emission configuration
+# Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
+# Maps event types to content block types for real-time UI emission
+streaming_emission:
+  text_content_types:
+    - assistant.message_delta
+    - assistant.streaming_delta
+  thinking_content_types:
+    - assistant.reasoning_delta
+
 event_classifications:
   bridge:
     # Content events - map SDK dotted names to domain types
@@ -39,6 +57,7 @@ event_classifications:
   consume:
     - assistant.turn_start  # SDK v0.1.33 - turn lifecycle, consume internally
     - assistant.reasoning  # SDK v0.1.33 - final reasoning summary, consume internally
+    - assistant.intent  # SDK v0.2.0 - intent report echo, consume internally
     - tool.execution_start
     - tool_use_start  # Legacy underscore alias
     - tool.execution_progress

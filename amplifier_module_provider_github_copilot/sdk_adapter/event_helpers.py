@@ -40,25 +40,37 @@ def is_idle_event(event_type: str | None) -> bool:
 
     SDK uses "session.idle", tests may use "SESSION_IDLE".
     Per contracts/event-vocabulary.md: session.idle -> TURN_COMPLETE
+
+    IMPORTANT: Uses explicit set matching, NOT substring matching.
+    Substring matching would misclassify "session.idle_timeout" as idle.
+    Contract: event-vocabulary:Classification:MUST:1
     """
     if event_type is None:
         return False
     type_lower = event_type.lower()
+    # Explicit set of valid idle event types (exact match only)
     # SDK format: "session.idle" (dot-separated)
     # Config format: "session_idle" (underscore)
-    # Legacy format: "SESSION_IDLE" (uppercase)
-    return "idle" in type_lower
+    # Domain format: "SESSION_IDLE" (uppercase, lowered by comparison)
+    idle_events = {"session.idle", "session_idle"}
+    return type_lower in idle_events
 
 
 def is_error_event(event_type: str | None) -> bool:
     """Check if event signals an error.
 
     Handles various error event formats.
+
+    IMPORTANT: Uses explicit set matching, NOT substring matching.
+    Substring matching would misclassify "tool_error_recovered" as error.
+    Contract: event-vocabulary:Classification:MUST:1
     """
     if event_type is None:
         return False
     type_lower = event_type.lower()
-    return "error" in type_lower
+    # Explicit set of valid error event types (exact match only)
+    error_events = {"error", "session.error", "session_error"}
+    return type_lower in error_events
 
 
 def is_assistant_message(event_type: str | None) -> bool:

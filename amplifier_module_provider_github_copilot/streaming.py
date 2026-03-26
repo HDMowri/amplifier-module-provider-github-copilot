@@ -20,7 +20,9 @@ from amplifier_core import (
 )
 
 from .error_translation import ConfigurationError
-from .sdk_adapter.extract import extract_event_fields
+
+# Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
+from .sdk_adapter import extract_event_fields
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +210,7 @@ class StreamingAccumulator:
                         name=tc.get("name", ""),
                         arguments=tc.get("arguments", {})
                         if isinstance(tc.get("arguments"), dict)
-                        else None,
+                        else {},
                     )
                 )
 
@@ -221,13 +223,32 @@ class StreamingAccumulator:
                 total_tokens=self.usage.get("total_tokens", 0),
             )
 
+        # Normalize finish_reason for orchestrator
+        # Contract: streaming-contract:FinishReason:MUST:5
+        # In abort-on-capture flow, TURN_COMPLETE may not arrive.
+        # The orchestrator relies on finish_reason to continue the agent loop.
+        #
+        # CRITICAL: tool_calls ALWAYS override SDK finish_reason
+        # The SDK may send "stop" even when there are tool calls (deny flow),
+        # but we MUST tell the orchestrator to execute them.
+        if tool_calls:
+            # Tool calls present: orchestrator must execute them
+            # Overrides any SDK-provided finish_reason
+            normalized_finish_reason = "tool_use"
+        elif not self.finish_reason:
+            # No tool calls and no SDK finish_reason: normal completion
+            normalized_finish_reason = "end_turn"
+        else:
+            # No tool calls but SDK provided finish_reason: preserve it
+            normalized_finish_reason = self.finish_reason
+
         # Contract: content_blocks is None when empty (not empty list)
         # streaming-contract:StreamingResponse:MUST:4
         return StreamingChatResponse(
             content=content,  # type: ignore[arg-type]
             tool_calls=tool_calls,
             usage=usage,
-            finish_reason=self.finish_reason,
+            finish_reason=normalized_finish_reason,
             content_blocks=content_blocks if content_blocks else None,
             text=self.text_content or None,
         )
@@ -238,9 +259,17 @@ def _empty_str_to_str_dict() -> dict[str, str]:
     return {}
 
 
+def _empty_str_set() -> set[str]:
+    """Return an empty string set."""
+    return set()
+
+
 @dataclass
 class EventConfig:
-    """Configuration for event translation."""
+    """Configuration for event translation.
+
+    Contract: event-vocabulary.md, streaming-contract:ProgressiveStreaming
+    """
 
     bridge_mappings: dict[str, tuple[DomainEventType, str | None]] = field(
         default_factory=lambda: {}
@@ -248,6 +277,11 @@ class EventConfig:
     consume_patterns: list[str] = field(default_factory=lambda: [])
     drop_patterns: list[str] = field(default_factory=lambda: [])
     finish_reason_map: dict[str, str] = field(default_factory=_empty_str_to_str_dict)
+    # Content event types for TTFT tracking (behaviors:Streaming:MUST:1)
+    content_event_types: set[str] = field(default_factory=_empty_str_set)
+    # Streaming emission types (streaming-contract:ProgressiveStreaming:SHOULD:1)
+    text_content_types: set[str] = field(default_factory=_empty_str_set)
+    thinking_content_types: set[str] = field(default_factory=_empty_str_set)
 
 
 def _validate_no_classification_overlap(
@@ -391,6 +425,16 @@ def _load_event_config_cached(config_path_str: str) -> EventConfig:
     consume_patterns = classifications.get("consume", [])
     drop_patterns = classifications.get("drop", [])
 
+    # Load content event types for TTFT tracking (Three-Medium: policy from YAML)
+    # Contract: behaviors:Streaming:MUST:1
+    content_event_types = set(raw.get("content_event_types", []))
+
+    # Load streaming emission types (Three-Medium: policy from YAML)
+    # Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
+    streaming_emission = raw.get("streaming_emission", {})
+    text_content_types = set(streaming_emission.get("text_content_types", []))
+    thinking_content_types = set(streaming_emission.get("thinking_content_types", []))
+
     # Validate no overlap between BRIDGE, CONSUME, and DROP categories
     # Contract: event-vocabulary:Classification:MUST:1
     # Each event type has exactly one classification
@@ -401,6 +445,9 @@ def _load_event_config_cached(config_path_str: str) -> EventConfig:
         consume_patterns=consume_patterns,
         drop_patterns=drop_patterns,
         finish_reason_map=finish_reason_map,
+        content_event_types=content_event_types,
+        text_content_types=text_content_types,
+        thinking_content_types=thinking_content_types,
     )
 
 

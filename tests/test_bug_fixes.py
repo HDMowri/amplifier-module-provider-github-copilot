@@ -6,8 +6,6 @@ Contract: contracts/provider-protocol.md
 
 from pathlib import Path
 
-import pytest
-
 
 class TestAC1LoadEventConfigCrash:
     """AC-1: Fix load_event_config crash on missing file."""
@@ -48,41 +46,9 @@ class TestAC1LoadEventConfigCrash:
         assert result.bridge_mappings == {}
 
 
-class TestAC2DeadAsserts:
-    """AC-2: Remove dead assert statements."""
-
-    def test_complete_with_none_session_raises_proper_error(self):
-        """complete() with sdk_create_fn returning None raises ProviderUnavailableError."""
-        import asyncio
-        from typing import Any
-
-        from amplifier_module_provider_github_copilot.error_translation import (
-            ProviderUnavailableError,
-        )
-        from amplifier_module_provider_github_copilot.provider import (
-            CompletionRequest,
-            complete,
-        )
-        from amplifier_module_provider_github_copilot.sdk_adapter.types import SessionConfig
-
-        async def broken_create_fn(_config: SessionConfig) -> Any:
-            return None
-
-        async def run_test() -> None:
-            events: list[Any] = []
-            # AC-2: Should raise ProviderUnavailableError, NOT AssertionError
-            with pytest.raises(ProviderUnavailableError) as exc_info:
-                async for event in complete(
-                    CompletionRequest(prompt="test"),
-                    sdk_create_fn=broken_create_fn,
-                ):
-                    events.append(event)
-
-            # Verify it's the correct error with proper message
-            assert "SDK session factory returned None" in str(exc_info.value)
-            assert exc_info.value.provider == "github-copilot"
-
-        asyncio.run(run_test())
+# TestAC2DeadAsserts removed - the test was for completion.py which is now deleted.
+# The production path (provider._execute_sdk_completion) uses CopilotClientWrapper
+# which is a properly implemented context manager that never yields None.
 
 
 class TestAC3RetryAfterRegex:

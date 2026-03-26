@@ -359,6 +359,129 @@ class TestLoadRetryConfigFailFast:
         assert result.max_delay_ms == 30000
         assert result.jitter_factor == 0.1
 
+    def test_missing_retry_section_raises_configuration_error(self) -> None:
+        """Missing 'retry' section raises ConfigurationError (fail-fast).
+
+        Contract: behaviors:Retry:MUST:4
+        """
+        from amplifier_module_provider_github_copilot.config_loader import load_retry_config
+
+        load_retry_config.cache_clear()
+
+        # Config with no 'retry' key
+        bad_config: dict[str, object] = {"other_section": {}}
+
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch("builtins.open", mock_open(read_data="yaml content")),
+            patch(
+                "amplifier_module_provider_github_copilot.config_loader.yaml.safe_load",
+                return_value=bad_config,
+            ),
+        ):
+            with pytest.raises(Exception) as exc:
+                load_retry_config()
+
+            assert "retry" in str(exc.value).lower()
+
+    def test_missing_backoff_section_raises_configuration_error(self) -> None:
+        """Missing 'backoff' section raises ConfigurationError (fail-fast).
+
+        Contract: behaviors:Retry:MUST:4
+        """
+        from amplifier_module_provider_github_copilot.config_loader import load_retry_config
+
+        load_retry_config.cache_clear()
+
+        # Config with retry but no backoff
+        bad_config: dict[str, object] = {
+            "retry": {
+                "max_attempts": 3,
+                # Missing backoff section
+            }
+        }
+
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch("builtins.open", mock_open(read_data="yaml content")),
+            patch(
+                "amplifier_module_provider_github_copilot.config_loader.yaml.safe_load",
+                return_value=bad_config,
+            ),
+        ):
+            with pytest.raises(Exception) as exc:
+                load_retry_config()
+
+            assert "backoff" in str(exc.value).lower()
+
+    def test_missing_max_attempts_raises_configuration_error(self) -> None:
+        """Missing 'max_attempts' raises ConfigurationError (fail-fast).
+
+        Contract: behaviors:Retry:MUST:4
+        """
+        from amplifier_module_provider_github_copilot.config_loader import load_retry_config
+
+        load_retry_config.cache_clear()
+
+        # Config with no max_attempts
+        bad_config: dict[str, object] = {
+            "retry": {
+                # Missing max_attempts
+                "backoff": {
+                    "base_delay_ms": 1000,
+                    "max_delay_ms": 30000,
+                    "jitter_factor": 0.1,
+                },
+            }
+        }
+
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch("builtins.open", mock_open(read_data="yaml content")),
+            patch(
+                "amplifier_module_provider_github_copilot.config_loader.yaml.safe_load",
+                return_value=bad_config,
+            ),
+        ):
+            with pytest.raises(Exception) as exc:
+                load_retry_config()
+
+            assert "max_attempts" in str(exc.value).lower()
+
+    def test_missing_backoff_key_raises_configuration_error(self) -> None:
+        """Missing backoff key raises ConfigurationError (fail-fast).
+
+        Contract: behaviors:Retry:MUST:4
+        """
+        from amplifier_module_provider_github_copilot.config_loader import load_retry_config
+
+        load_retry_config.cache_clear()
+
+        # Config with incomplete backoff section
+        bad_config: dict[str, object] = {
+            "retry": {
+                "max_attempts": 3,
+                "backoff": {
+                    "base_delay_ms": 1000,
+                    # Missing max_delay_ms and jitter_factor
+                },
+            }
+        }
+
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch("builtins.open", mock_open(read_data="yaml content")),
+            patch(
+                "amplifier_module_provider_github_copilot.config_loader.yaml.safe_load",
+                return_value=bad_config,
+            ),
+        ):
+            with pytest.raises(Exception) as exc:
+                load_retry_config()
+
+            # Should mention missing key
+            assert "max_delay_ms" in str(exc.value) or "jitter" in str(exc.value).lower()
+
 
 # ============================================================================
 # Fake Tool Detection Config Loading Tests

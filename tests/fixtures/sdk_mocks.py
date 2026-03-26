@@ -12,7 +12,8 @@ This module provides mock implementations matching the real SDK shapes:
 Factory helpers for common event types are also provided.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -404,3 +405,142 @@ class MockSDKSessionWithAbort(MockSDKSession):
             await asyncio.sleep(60)
         elif self.abort_behavior == "exception":
             raise RuntimeError("Abort failed")
+
+
+# =============================================================================
+# MockCopilotClientWrapper — Drop-in replacement for CopilotClientWrapper
+# =============================================================================
+
+
+class MockCopilotClientWrapper:
+    """Mock drop-in replacement for CopilotClientWrapper.
+
+    Use this to test the PRODUCTION code path (provider._execute_sdk_completion)
+    without needing the real SDK installed.
+
+    Contract Reference:
+    - sdk-boundary:Membrane:MUST:1 — Mock at the membrane level
+    - behaviors:Streaming:MUST:4 — Tests bounded queue behavior
+
+    Usage:
+        # Create mock with events
+        mock_client = MockCopilotClientWrapper(
+            events=[text_delta_event("hello"), idle_event()]
+        )
+
+        # Inject into provider
+        provider = GitHubCopilotProvider(client=mock_client)
+
+        # Call production code path
+        response = await provider.complete(request)
+
+    This allows tests to exercise the SAME code path as production,
+    eliminating the completion.py/sdk_create_fn test-only path.
+    """
+
+    def __init__(
+        self,
+        events: Sequence[SessionEvent | dict[str, Any]] | None = None,
+        *,
+        session_class: type[MockSDKSession] = MockSDKSession,
+        raise_on_send: Exception | None = None,
+        raise_on_session: Exception | None = None,
+        model_list: list[dict[str, Any]] | None = None,
+        **session_kwargs: Any,
+    ) -> None:
+        """Initialize mock client wrapper.
+
+        Args:
+            events: Events to deliver during session.send().
+            session_class: MockSDKSession class to use (e.g., MockSDKSessionWithAbort).
+            raise_on_send: Exception to raise during send().
+            raise_on_session: Exception to raise when creating session.
+            model_list: List of model dicts for list_models() (SDK format).
+            **session_kwargs: Additional kwargs passed to session_class.
+        """
+        self._events = events or []
+        self._session_class = session_class
+        self._raise_on_send = raise_on_send
+        self._raise_on_session = raise_on_session
+        self._model_list = model_list
+        self._session_kwargs = session_kwargs
+        self._closed = False
+        self._session: MockSDKSession | None = None
+
+    def is_healthy(self) -> bool:
+        """Always healthy for testing (no real subprocess)."""
+        return not self._closed
+
+    @asynccontextmanager
+    async def session(
+        self,
+        model: str | None = None,
+        *,
+        system_message: str | None = None,
+        tools: list[Any] | None = None,
+    ) -> AsyncIterator[MockSDKSession]:
+        """Create a mock session context manager.
+
+        Matches CopilotClientWrapper.session() signature exactly.
+
+        Args:
+            model: Model ID (stored for assertions).
+            system_message: System message (stored for assertions).
+            tools: Tool definitions (stored for assertions).
+
+        Yields:
+            MockSDKSession configured with events.
+
+        Raises:
+            Exception configured in raise_on_session.
+        """
+        if self._raise_on_session:
+            raise self._raise_on_session
+
+        # Store session config for test assertions
+        self.last_model = model
+        self.last_system_message = system_message
+        self.last_tools = tools
+
+        # Create session with configured events
+        self._session = self._session_class(
+            events=self._events,
+            raise_on_send=self._raise_on_send,
+            **self._session_kwargs,
+        )
+
+        try:
+            yield self._session
+        finally:
+            # Always disconnect (matches production behavior)
+            await self._session.disconnect()
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        """Return configured model list or default.
+
+        Matches CopilotClientWrapper.list_models() behavior.
+        """
+        if self._model_list is not None:
+            return self._model_list
+        # Default: return a minimal model list for testing
+        return [
+            {
+                "id": "gpt-4",
+                "name": "GPT-4",
+                "version": "gpt-4",
+            },
+            {
+                "id": "gpt-4o",
+                "name": "GPT-4o",
+                "version": "gpt-4o",
+            },
+        ]
+
+    async def close(self) -> None:
+        """Mark client as closed. Safe to call multiple times."""
+        self._closed = True
+
+    @property
+    def session_instance(self) -> MockSDKSession | None:
+        """Access the last created session for test assertions."""
+        return self._session

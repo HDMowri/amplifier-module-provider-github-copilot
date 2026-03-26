@@ -11,7 +11,7 @@ MUST constraints (from contract):
 - MUST set provider="github-copilot" on all errors
 - MUST preserve original exception via chaining
 - MUST use config-driven pattern matching
-- MUST fall through to ProviderUnavailableError(retryable=True) for unknown errors
+- MUST fall through to ProviderUnavailableError(retryable=False) for unknown errors
 """
 
 from __future__ import annotations
@@ -215,7 +215,8 @@ def _load_error_config_cached(config_path_str: str | None) -> ErrorConfig:
     return ErrorConfig(
         mappings=mappings,
         default_error=default.get("kernel_error", "ProviderUnavailableError"),
-        default_retryable=default.get("retryable", True),
+        # Python fallback MUST match YAML default (Three-Medium Architecture)
+        default_retryable=default.get("retryable", False),
     )
 
 

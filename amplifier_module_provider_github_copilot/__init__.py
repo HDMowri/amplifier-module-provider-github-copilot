@@ -32,7 +32,7 @@ if not _os.environ.get("SKIP_SDK_CHECK"):
     except _PkgNotFoundError as _e:
         raise ImportError(
             "Required dependency 'github-copilot-sdk' is not installed. "
-            "Install with:  pip install 'github-copilot-sdk>=0.1.32,<0.2.0'"
+            "Install with:  pip install 'github-copilot-sdk>=0.2.0,<0.3.0'"
         ) from _e
 
 from collections.abc import Awaitable, Callable
@@ -41,7 +41,9 @@ from typing import Any
 from amplifier_core import ModelInfo, ModuleCoordinator, ProviderInfo
 
 from .provider import GitHubCopilotProvider
-from .sdk_adapter.client import CopilotClientWrapper
+
+# Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
+from .sdk_adapter import CopilotClientWrapper
 
 __version__ = "2.0.0"
 

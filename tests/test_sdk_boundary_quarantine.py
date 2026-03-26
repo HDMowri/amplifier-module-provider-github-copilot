@@ -326,3 +326,74 @@ class TestSDKImportsRealPath:
                 sys.modules["amplifier_module_provider_github_copilot.sdk_adapter._imports"] = (
                     original_module
                 )
+
+
+class TestMembraneAPIPattern:
+    """Verify domain code uses sdk_adapter package API, not submodule imports.
+
+    Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter, not submodules
+
+    Domain modules (provider.py, streaming.py, request_adapter.py, __init__.py)
+    MUST import from .sdk_adapter package, NOT from .sdk_adapter.client,
+    .sdk_adapter.types, etc. directly.
+
+    This ensures encapsulation: internal restructuring doesn't break domain code.
+    """
+
+    # Domain files that should use membrane API
+    DOMAIN_FILES = [
+        "amplifier_module_provider_github_copilot/provider.py",
+        "amplifier_module_provider_github_copilot/streaming.py",
+        "amplifier_module_provider_github_copilot/request_adapter.py",
+        "amplifier_module_provider_github_copilot/__init__.py",
+    ]
+
+    # Forbidden submodule import patterns (should use .sdk_adapter not .sdk_adapter.X)
+    FORBIDDEN_PATTERNS = [
+        ".sdk_adapter.client",
+        ".sdk_adapter.event_helpers",
+        ".sdk_adapter.extract",
+        ".sdk_adapter.tool_capture",
+        ".sdk_adapter.types",
+        ".sdk_adapter._imports",
+        ".sdk_adapter._spec_utils",
+    ]
+
+    @pytest.mark.parametrize("file_path", DOMAIN_FILES)
+    def test_domain_file_uses_membrane_api(self, file_path: str) -> None:
+        """Domain file must import from sdk_adapter package, not submodules.
+
+        Contract: sdk-boundary:Membrane:MUST:1
+
+        Example of WRONG (bypasses membrane):
+            from .sdk_adapter.client import CopilotClientWrapper
+
+        Example of RIGHT (uses membrane):
+            from .sdk_adapter import CopilotClientWrapper
+        """
+        py_file = Path(file_path)
+        if not py_file.exists():
+            pytest.skip(f"{file_path} not found")
+
+        content = py_file.read_text()
+        tree = ast.parse(content)
+
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                # Check if import is from sdk_adapter submodule
+                for pattern in self.FORBIDDEN_PATTERNS:
+                    if node.module.endswith(pattern) or pattern in node.module:
+                        # Extract what's being imported
+                        names = ", ".join(alias.name for alias in node.names)
+                        violations.append(
+                            f"from {node.module} import {names} "
+                            f"(line {node.lineno}) — should use from .sdk_adapter import"
+                        )
+
+        assert not violations, (
+            f"{file_path} bypasses sdk_adapter membrane:\n"
+            + "\n".join(f"  - {v}" for v in violations)
+            + "\n\nFix: import from .sdk_adapter package, not submodules. "
+            "See sdk-boundary:Membrane:MUST:1"
+        )

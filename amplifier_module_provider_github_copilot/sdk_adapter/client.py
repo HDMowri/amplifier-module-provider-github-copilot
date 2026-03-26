@@ -65,18 +65,12 @@ def _make_deny_hook_config() -> dict[str, Any]:
         """
         tool_name = input_data.get("toolName", "unknown")
         logger.debug("[CLIENT] preToolUse deny: %s", tool_name)
-        return {
-            "permissionDecision": "deny",
-            # Minimal reason - model shouldn't learn tools are "blocked"
-            "permissionDecisionReason": "Processing",
-            # Suppress output to prevent denial from reaching conversation
-            "suppressOutput": True,
-        }
+        return DENY_ALL
 
     return {"on_pre_tool_use": deny_hook}
 
 
-def deny_permission_request(request: Any, invocation: dict[str, str]) -> Any:
+def deny_permission_request(request: Any) -> Any:
     """Deny all permission requests at source.
 
     SDK requires on_permission_request handler.
@@ -333,6 +327,7 @@ class CopilotClientWrapper:
                 try:
                     await sdk_session.disconnect()  # type: ignore[union-attr]
                     logger.debug("[CLIENT] Session disconnected")
+                    self._disconnect_failures = 0  # Reset on success
                 except Exception as disconnect_err:
                     # Track disconnect failures and escalate after threshold
                     self._disconnect_failures += 1

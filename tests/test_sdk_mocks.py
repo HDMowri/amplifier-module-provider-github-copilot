@@ -188,25 +188,5 @@ class TestEventFactories:
         assert event.data.finish_reason == "stop"
 
 
-class TestCentralizationVerification:
-    """Verify MockSDKSession is removed from other test files."""
-
-    def test_no_mock_sdk_session_in_test_integration(self) -> None:
-        """AC-2/AC-3: MockSDKSession class not defined in test_integration.py.
-
-        This test verifies centralization was successful.
-        """
-        import inspect
-
-        import tests.test_integration as test_integration
-
-        # Get all classes defined in the module
-        classes = [
-            name
-            for name, obj in inspect.getmembers(test_integration, inspect.isclass)
-            if obj.__module__ == test_integration.__name__
-        ]
-
-        assert "MockSDKSession" not in classes, (
-            "MockSDKSession should be imported from fixtures, not defined locally"
-        )
+# TestCentralizationVerification removed - test_integration.py was deleted
+# as part of the completion.py removal in Issue #6

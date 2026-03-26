@@ -58,6 +58,9 @@ lerna-debug.log*
 
 # Dev scratch files
 test_live_registry.py
+
+# Reference-only SDK clone (not for commit)
+ref-only/
 analyze_coverage.py
 tests_backup_*/
 

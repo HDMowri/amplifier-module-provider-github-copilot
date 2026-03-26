@@ -158,7 +158,8 @@ class TestEdgeCases:
             tool_calls=[MockToolCall(id="tc1", name="write", arguments={"text": "Hello 世界 🌍"})],
         )
         result = parse_tool_calls(response)
-        assert result[0].arguments["text"] == "Hello 世界 🌍"
+        # pyright: ignore[reportArgumentType] - arguments is dict in this test
+        assert result[0].arguments["text"] == "Hello 世界 🌍"  # type: ignore[index]
 
     def test_special_characters_in_tool_name(self) -> None:
         """Tool names with special characters are preserved."""

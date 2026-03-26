@@ -234,3 +234,81 @@ class TestE2ECompletionWithRealisticData:
         assert content_text == "This is the actual response text."
         assert "Data(" not in content_text
         assert "content=" not in content_text
+
+
+class TestToolArgumentExtraction:
+    """Test that tool arguments are correctly extracted, including empty dicts.
+
+    Contract: streaming-contract.md — tools MUST have arguments field.
+
+    Regression prevention: `if arguments` was dropping empty dict {} because
+    `bool({}) == False`. Zero-parameter tools would lose their arguments field.
+    """
+
+    def test_extract_event_fields_preserves_empty_arguments(self) -> None:
+        """extract_event_fields MUST preserve empty dict arguments.
+
+        Zero-parameter tools (like `list_files()`) have `arguments={}`.
+        These MUST NOT be dropped.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.extract import (
+            extract_event_fields,
+        )
+
+        # Mock SDK event with empty arguments (zero-parameter tool)
+        class MockToolData:
+            tool_call_id = "call_123"
+            tool_name = "list_files"
+            arguments: dict[str, Any] = {}  # Empty dict — zero-parameter tool
+
+        class MockToolEvent:
+            type = "tool.call"
+            data = MockToolData()
+
+        result = extract_event_fields(MockToolEvent())
+
+        # arguments MUST be present even when empty
+        assert "arguments" in result, (
+            "Empty arguments dict was dropped! "
+            "Fix extract.py: change 'if arguments' to 'if arguments is not None'"
+        )
+        assert result["arguments"] == {}
+
+    def test_extract_event_fields_preserves_populated_arguments(self) -> None:
+        """extract_event_fields MUST preserve populated arguments."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.extract import (
+            extract_event_fields,
+        )
+
+        class MockToolData:
+            tool_call_id = "call_456"
+            tool_name = "read_file"
+            arguments = {"path": "/etc/passwd", "encoding": "utf-8"}
+
+        class MockToolEvent:
+            type = "tool.call"
+            data = MockToolData()
+
+        result = extract_event_fields(MockToolEvent())
+
+        assert "arguments" in result
+        assert result["arguments"] == {"path": "/etc/passwd", "encoding": "utf-8"}
+
+    def test_extract_event_fields_handles_missing_arguments(self) -> None:
+        """extract_event_fields handles events with no arguments attribute."""
+        from amplifier_module_provider_github_copilot.sdk_adapter.extract import (
+            extract_event_fields,
+        )
+
+        class MockData:
+            delta_content = "hello"  # SDK uses delta_content, not text
+
+        class MockEvent:
+            type = "assistant.message_delta"
+            data = MockData()
+
+        result = extract_event_fields(MockEvent())
+
+        # Non-tool events shouldn't have arguments but should have text
+        assert "arguments" not in result
+        assert result.get("text") == "hello"

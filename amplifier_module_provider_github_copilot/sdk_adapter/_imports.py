@@ -69,5 +69,6 @@ else:
 __all__ = [
     "CopilotClient",
     "PermissionRequestResult",
+    "SubprocessConfig",
     "get_copilot_spec_origin",  # Re-export from _spec_utils
 ]

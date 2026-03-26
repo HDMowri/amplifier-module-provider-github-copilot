@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from amplifier_module_provider_github_copilot.error_translation import (
-    AuthenticationError,
     LLMError,
 )
 from amplifier_module_provider_github_copilot.sdk_adapter.client import (
@@ -81,35 +80,8 @@ class TestDenyHookOnWrapper:
         assert "on_pre_tool_use" in captured_config["hooks"]
 
 
-class TestDoubleTranslationGuard:
-    """AC-5: LLMError not double-wrapped."""
-
-    @pytest.mark.asyncio
-    async def test_llm_error_not_double_wrapped(self) -> None:
-        """LLMError raised inside complete() is not re-translated."""
-        from amplifier_module_provider_github_copilot.provider import (
-            CompletionRequest,
-            complete,
-        )
-
-        # Create a mock session factory that raises AuthenticationError
-        async def failing_sdk_fn(config: object) -> AsyncMock:
-            raise AuthenticationError("Already translated", provider="test")
-
-        request = CompletionRequest(prompt="Hello", model="gpt-4")
-
-        caught_error: AuthenticationError | None = None
-        try:
-            async for _ in complete(request, sdk_create_fn=failing_sdk_fn):
-                pass  # pragma: no cover
-        except AuthenticationError as e:
-            caught_error = e
-
-        # Should have caught the error
-        assert caught_error is not None
-        # Should NOT be wrapped in another error
-        assert caught_error.__cause__ is None
-        assert caught_error.provider == "test"
+# TestDoubleTranslationGuard removed - migrated to test_behaviors.py
+# TestProductionPathWithMockClient::test_llm_error_not_double_wrapped (Issue #6)
 
 
 class TestSystemMessageStructure:

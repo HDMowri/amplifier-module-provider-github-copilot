@@ -66,9 +66,9 @@ retry:
 
 ```yaml
 streaming:
-  event_queue_size: 256
-  ttft_warning_ms: 5000      # Time to first token
-  max_gap_warning_ms: 5000   # Max gap between tokens
+  event_queue_size: 1024
+  ttft_warning_ms: 15000     # Time to first token (lenient for SDK latency)
+  max_gap_warning_ms: 10000  # Max gap between tokens (lenient for tool work)
   max_gap_error_ms: 30000    # Error threshold
 ```
 
@@ -86,28 +86,49 @@ streaming:
 ### Config Schema (models.yaml)
 
 ```yaml
+provider:
+  defaults:
+    model: "claude-opus-4.5"   # Default model
+
 models:
-  default: "claude-sonnet-4"
-  
-  aliases:
-    fast: "gpt-4.1-mini"
-    smart: "claude-opus-4.5"
-    reasoning: "o3"
-  
-  capabilities:
-    claude-opus-4.5:
-      context_window: 200000
-      max_output_tokens: 8192
-      supports_vision: true
-      supports_reasoning: true
+  - id: claude-opus-4.5
+    display_name: "Claude Opus 4.5"
+    context_window: 200000
+    max_output_tokens: 32000
+    capabilities:
+      - streaming
+      - tool_use
+      - vision
 ```
+
+### Model Selection Priority
+
+When determining which model to use for a completion request:
+
+```
+Priority 1: request.model         (explicit per-request override)
+Priority 2: config["default_model"]  (runtime config from mount/routing matrix)
+Priority 3: YAML defaults.model    (static configuration fallback)
+```
+
+This priority order enables:
+- **Routing Matrix Integration**: Amplifier kernel passes `config={"default_model": "model-id"}` at `mount()` time. Each sub-agent/delegate gets its assigned model.
+- **Request Override**: Individual requests can still specify a different model.
+- **Fallback Safety**: If mount config is missing, YAML provides sensible defaults.
 
 ### MUST Constraints
 
-1. **MUST** resolve aliases to model IDs
-2. **MUST** use default if no model specified
+1. **MUST** respect model selection priority: request.model > config["default_model"] > YAML
+2. **MUST NOT** mutate cached ProviderConfig (multiple providers share via @lru_cache)
 3. **SHOULD** validate model exists before request
 4. **MUST** raise `NotFoundError` for invalid models
+
+### Test Anchors
+
+| Anchor | Clause |
+|--------|--------|
+| `behaviors:ModelSelection:MUST:1` | Respects priority order |
+| `behaviors:ModelSelection:MUST:2` | Does not mutate cached config |
 
 ---
 
@@ -260,8 +281,8 @@ When the SDK is unavailable AND the disk cache is empty/invalid, the provider MU
 
 | Anchor | Clause |
 |--------|--------|
-| `behaviors:Models:MUST:1` | Resolves aliases |
-| `behaviors:Models:MUST:2` | Raises NotFoundError for invalid |
+| `behaviors:Models:MUST:1` | Raises NotFoundError for invalid model |
+| `behaviors:Models:MUST:2` | Respects model selection priority (request > config > YAML) |
 
 ### Config
 
@@ -294,6 +315,6 @@ When the SDK is unavailable AND the disk cache is empty/invalid, the provider MU
 - [ ] Backoff with jitter implemented
 - [ ] Only retry errors with `retryable=True`
 - [ ] Streaming timing warnings work
-- [ ] Model aliases resolved
 - [ ] NotFoundError for invalid models
+- [ ] Model selection priority respected
 - [ ] Logging follows policy

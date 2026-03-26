@@ -342,3 +342,265 @@ class TestNoRegressions:
 
         assert len(result) == 1
         assert result[0].arguments == {"key": "value"}
+
+
+class TestObservabilityConfigLoading:
+    """Tests for observability config loading edge cases.
+
+    Contract: behaviors:Observability:SHOULD:1 — graceful degradation on config errors.
+    """
+
+    def test_load_observability_config_returns_config(self) -> None:
+        """load_observability_config returns ObservabilityConfig."""
+        from amplifier_module_provider_github_copilot.observability import (
+            ObservabilityConfig,
+            load_observability_config,
+        )
+
+        config = load_observability_config()
+        assert isinstance(config, ObservabilityConfig)
+
+    def test_default_observability_config_has_expected_defaults(self) -> None:
+        """_default_observability_config returns sane defaults."""
+        from amplifier_module_provider_github_copilot.observability import (
+            _default_observability_config,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        config = _default_observability_config()
+        assert config.provider_name == "github-copilot"
+        assert config.events_enabled is True
+        assert config.raw_payloads is False
+
+    def test_observability_config_has_event_names(self) -> None:
+        """Loaded config has event_names from observability.yaml."""
+        from amplifier_module_provider_github_copilot.observability import (
+            load_observability_config,
+        )
+
+        config = load_observability_config()
+        assert config.event_names is not None
+        # Check key event name attributes exist
+        assert hasattr(config.event_names, "llm_request")
+        assert hasattr(config.event_names, "llm_response")
+
+    def test_observability_config_has_status_values(self) -> None:
+        """Loaded config has status values from observability.yaml."""
+        from amplifier_module_provider_github_copilot.observability import (
+            load_observability_config,
+        )
+
+        config = load_observability_config()
+        assert config.status is not None
+        assert hasattr(config.status, "ok")
+        assert hasattr(config.status, "error")
+
+
+class TestLlmLifecycleContext:
+    """Tests for llm_lifecycle context manager."""
+
+    @pytest.mark.asyncio
+    async def test_llm_lifecycle_yields_context(self) -> None:
+        """llm_lifecycle yields LlmLifecycleContext."""
+        from amplifier_module_provider_github_copilot.observability import (
+            LlmLifecycleContext,
+            llm_lifecycle,
+        )
+
+        async with llm_lifecycle(coordinator=None, model="gpt-4o") as ctx:
+            assert isinstance(ctx, LlmLifecycleContext)
+            assert ctx.model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_llm_lifecycle_accepts_config(self) -> None:
+        """llm_lifecycle accepts pre-loaded config."""
+        from amplifier_module_provider_github_copilot.observability import (
+            ObservabilityConfig,
+            llm_lifecycle,
+        )
+
+        custom_config = ObservabilityConfig(provider_name="test-provider")
+
+        async with llm_lifecycle(coordinator=None, model="gpt-4o", config=custom_config) as ctx:
+            assert ctx.config.provider_name == "test-provider"
+
+    @pytest.mark.asyncio
+    async def test_llm_lifecycle_loads_config_when_none(self) -> None:
+        """llm_lifecycle loads config when config=None."""
+        from amplifier_module_provider_github_copilot.observability import (
+            llm_lifecycle,
+        )
+
+        async with llm_lifecycle(coordinator=None, model="gpt-4o", config=None) as ctx:
+            # Config should be loaded from yaml
+            assert ctx.config is not None
+            assert ctx.config.provider_name == "github-copilot"
+
+
+# =============================================================================
+# Additional Coverage Tests
+# Coverage targets: lines 111-120, 123, 129, 168-170
+# =============================================================================
+
+
+class TestObservabilityConfigFallbacks:
+    """Tests for config loading fallback paths.
+
+    Covers lines 111-120, 123, 129, 168-170 in observability.py.
+    """
+
+    def test_config_fallback_to_filesystem_path(self) -> None:
+        """load_observability_config falls back to filesystem on importlib failure.
+
+        Covers lines 111-120.
+        """
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot.observability import (
+            load_observability_config,
+        )
+
+        # Clear cache
+        load_observability_config.cache_clear()
+
+        # Mock importlib.resources to fail
+        with patch("importlib.resources.files") as mock_files:
+            mock_files.side_effect = ModuleNotFoundError("No module")
+
+            config = load_observability_config()
+
+        # Should still return valid config from filesystem fallback (or defaults if not found)
+        assert config is not None
+        assert config.provider_name == "github-copilot"
+
+        # Clear cache for other tests
+        load_observability_config.cache_clear()
+
+    def test_config_returns_default_on_empty_yaml(self) -> None:
+        """load_observability_config returns defaults when YAML is empty.
+
+        Covers line 129.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from amplifier_module_provider_github_copilot.observability import (
+            load_observability_config,
+        )
+
+        # Clear cache
+        load_observability_config.cache_clear()
+
+        # Mock importlib to return empty file content
+        MagicMock()
+        mock_config_file = MagicMock()
+        mock_config_file.read_text.return_value = ""  # Empty content
+
+        with patch("importlib.resources.files") as mock_resources:
+            mock_resources.return_value.joinpath.return_value = mock_config_file
+
+            config = load_observability_config()
+
+        # Should return default config
+        assert config is not None
+        assert config.provider_name == "github-copilot"
+
+        # Clear cache for other tests
+        load_observability_config.cache_clear()
+
+    def test_config_returns_default_on_yaml_parse_error(self) -> None:
+        """load_observability_config returns defaults when YAML parsing fails.
+
+        Covers lines 168-170.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from amplifier_module_provider_github_copilot.observability import (
+            load_observability_config,
+        )
+
+        # Clear cache
+        load_observability_config.cache_clear()
+
+        # Mock importlib to return invalid YAML
+        MagicMock()
+        mock_config_file = MagicMock()
+        mock_config_file.read_text.return_value = "invalid: yaml: content: [[[["
+
+        with patch("importlib.resources.files") as mock_resources:
+            mock_resources.return_value.joinpath.return_value = mock_config_file
+
+            config = load_observability_config()
+
+        # Should return default config (graceful degradation)
+        assert config is not None
+        assert config.provider_name == "github-copilot"
+
+        # Clear cache for other tests
+        load_observability_config.cache_clear()
+
+    def test_config_returns_default_when_both_sources_fail(self) -> None:
+        """load_observability_config returns defaults when both importlib and path fail.
+
+        Covers lines 123 (warning log and calling _default_observability_config).
+        """
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot.observability import (
+            load_observability_config,
+        )
+
+        # Clear cache
+        load_observability_config.cache_clear()
+
+        # Mock both sources to fail
+        with patch("importlib.resources.files") as mock_files:
+            mock_files.side_effect = ModuleNotFoundError("No module")
+
+            original_exists = Path.exists
+
+            def mock_exists(self: Path) -> bool:
+                if "observability.yaml" in str(self):
+                    return False
+                return original_exists(self)
+
+            with patch.object(Path, "exists", mock_exists):
+                config = load_observability_config()
+
+        # Should return default config
+        assert config is not None
+        assert config.provider_name == "github-copilot"
+        assert config.events_enabled is True
+
+        # Clear cache for other tests
+        load_observability_config.cache_clear()
+
+    def test_config_handles_none_yaml_data(self) -> None:
+        """load_observability_config handles None from yaml.safe_load.
+
+        Covers line 129.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from amplifier_module_provider_github_copilot.observability import (
+            load_observability_config,
+        )
+
+        # Clear cache
+        load_observability_config.cache_clear()
+
+        # Mock importlib to return empty YAML (which safe_load returns as None)
+        MagicMock()
+        mock_config_file = MagicMock()
+        mock_config_file.read_text.return_value = "# just a comment"
+
+        with patch("importlib.resources.files") as mock_resources:
+            mock_resources.return_value.joinpath.return_value = mock_config_file
+
+            config = load_observability_config()
+
+        # Should return default config
+        assert config is not None
+        assert config.provider_name == "github-copilot"
+
+        # Clear cache for other tests
+        load_observability_config.cache_clear()

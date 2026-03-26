@@ -27,7 +27,14 @@ from .event_helpers import (
 )
 from .extract import extract_event_fields
 from .tool_capture import ToolCaptureHandler, normalize_tool_request
-from .types import SDKSession, SessionConfig
+from .types import (
+    CompletionConfig,
+    CompletionRequest,
+    SDKCreateFn,
+    SDKSession,
+    SessionConfig,
+    extract_attachments_from_chat_request,
+)
 
 # Export domain types only
 # CopilotClientWrapper is exposed for provider.py but is an internal detail
@@ -36,6 +43,9 @@ __all__ = [
     "CopilotClientWrapper",  # Internal: provider.py needs this
     "SessionConfig",  # Domain type
     "SDKSession",  # Domain type alias
+    "CompletionConfig",  # Domain type for completion settings
+    "CompletionRequest",  # Domain type for completion input
+    "SDKCreateFn",  # Type alias for SDK session factory
     "extract_event_fields",  # Unified SDK event extraction
     "extract_event_type",  # Event type helpers
     "is_idle_event",  # Event type helpers
@@ -46,4 +56,5 @@ __all__ = [
     "ToolCaptureHandler",  # Extracted tool capture handler
     "normalize_tool_request",  # Tool request normalization
     "get_copilot_spec_origin",  # SDK utility: find SDK package path
+    "extract_attachments_from_chat_request",  # Request attachment extraction
 ]

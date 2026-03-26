@@ -21,13 +21,14 @@ class TestSessionConfigContract:
     """Verify the session_config dict sent to SDK matches our contract."""
 
     @pytest.mark.asyncio
-    async def test_available_tools_always_empty_list(self) -> None:
-        """SDK built-in tools MUST NOT use empty list.
+    async def test_available_tools_must_not_be_set(self) -> None:
+        """SDK built-in tools MUST NOT use available_tools parameter.
 
         available_tools=[] causes SDK whitelist behavior that prevents
         the model from even suggesting tools. We use deny hooks instead.
 
-        Contract: deny-destroy:NoExecution:MUST:3
+        Contract: deny-destroy:ToolSuppression:MUST:1 — available_tools NOT set
+        Contract: sdk-boundary:ToolForwarding:MUST:3 — MUST NOT set available_tools
         SDK ref: copilot/types.py SessionConfig.available_tools
         SDK ref: copilot/client.py lines 527-529 (available_tools is not None check)
         """

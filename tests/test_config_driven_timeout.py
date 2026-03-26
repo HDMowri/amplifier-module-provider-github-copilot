@@ -8,12 +8,7 @@ config/models.yaml instead of using hardcoded 120.0 value.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 
 class TestModuleLevelCompleteTimeout:
@@ -56,60 +51,9 @@ class TestModuleLevelCompleteTimeout:
             "complete() should use load_models_config() to load timeout"
         )
 
-    @pytest.mark.asyncio
-    async def test_module_complete_timeout_from_config(self) -> None:
-        """Module-level complete() reads timeout from models.yaml defaults.
-
-        Contract anchor: behaviors.md:Config:MUST:1
-        """
-        from amplifier_module_provider_github_copilot.provider import (
-            CompletionConfig,
-            CompletionRequest,
-            complete,
-            load_models_config,
-        )
-
-        # Verify config has timeout
-        config = load_models_config()
-        assert "timeout" in config.defaults
-        assert config.defaults["timeout"] == 3600
-
-        # Create mock session that properly fires session.idle event
-        # The mock must capture the handler from on() and fire idle in send()
-        mock_session = MagicMock()
-        captured_handlers: list[Callable[[Any], None]] = []
-
-        def mock_on(handler: Callable[[Any], None]) -> MagicMock:
-            captured_handlers.append(handler)
-            return MagicMock()  # unsubscribe fn
-
-        async def mock_send(prompt: str, attachments: list[dict[str, Any]] | None = None) -> str:
-            # Fire session.idle event to unblock the provider
-            for handler in captured_handlers:
-                handler({"type": "session.idle"})
-            return "msg-id"
-
-        mock_session.on = mock_on
-        mock_session.send = mock_send
-        mock_session.disconnect = AsyncMock()
-
-        # Create mock SDK factory
-        async def mock_sdk_create_fn(_config: object) -> MagicMock:
-            return mock_session
-
-        # Run complete (it should use config timeout, not hardcoded 120)
-        request = CompletionRequest(prompt="test", model="claude-opus-4.5")
-
-        events: list[Any] = []
-        async for event in complete(
-            request,
-            config=CompletionConfig(),
-            sdk_create_fn=mock_sdk_create_fn,
-        ):
-            events.append(event)
-
-        # Success - no TimeoutError with 120.0 value
-        # The test passes if complete() used config-driven timeout
+    # test_module_complete_timeout_from_config removed - tested completion.py which is now deleted
+    # The production path (provider._execute_sdk_completion) still uses config-driven timeout,
+    # verified by TestProductionPathWithMockClient tests in test_behaviors.py
 
 
 class TestTimeoutConfigValue:

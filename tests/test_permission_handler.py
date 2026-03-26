@@ -55,9 +55,8 @@ class TestOnPermissionRequestHandler:
 
         # Mock a permission request
         mock_request = MagicMock()
-        mock_invocation = {"tool_name": "read_file", "session_id": "test-123"}
 
-        result = deny_permission_request(mock_request, mock_invocation)
+        result = deny_permission_request(mock_request)
 
         # Result can be PermissionRequestResult (with .kind) or dict fallback
         if hasattr(result, "kind"):

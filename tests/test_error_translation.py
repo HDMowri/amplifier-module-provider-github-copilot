@@ -142,15 +142,20 @@ class TestErrorConfigLoading:
         """Config specifies default error type."""
         from amplifier_module_provider_github_copilot.error_translation import load_error_config
 
-        config = load_error_config("config/errors.yaml")
+        # Use None to load from package resources (production path)
+        config = load_error_config()
         assert config.default_error == "ProviderUnavailableError"
 
     def test_config_has_default_retryable(self) -> None:
-        """Config specifies default retryable flag."""
+        """Config specifies default retryable flag.
+
+        Per Golden Vision V2 spec, default is non-retryable (conservative).
+        """
         from amplifier_module_provider_github_copilot.error_translation import load_error_config
 
-        config = load_error_config("config/errors.yaml")
-        assert config.default_retryable is True
+        # Use None to load from package resources (production path)
+        config = load_error_config()
+        assert config.default_retryable is False
 
 
 class TestErrorTranslationMappings:

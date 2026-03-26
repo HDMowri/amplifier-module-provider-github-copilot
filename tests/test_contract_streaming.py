@@ -150,3 +150,129 @@ class TestAccumulatedResponse:
 
         assert result.text_content == ""
         assert result.tool_calls == []
+
+
+class TestFinishReasonNormalization:
+    """streaming-contract:FinishReason:MUST:5"""
+
+    def test_finish_reason_tool_use_when_tools_captured(self) -> None:
+        """streaming-contract:FinishReason:MUST:5.
+
+        finish_reason="tool_use" when tool_calls present.
+
+        In abort-on-capture flow, TURN_COMPLETE may not arrive before session termination.
+        The provider MUST set finish_reason="tool_use" when tool_calls is non-empty,
+        regardless of whether TURN_COMPLETE event was received.
+
+        This ensures the orchestrator continues the agent loop instead of dropping
+        to interactive mode.
+        """
+        accumulator = StreamingAccumulator()
+
+        # Add tool calls WITHOUT TURN_COMPLETE (simulates abort-on-capture)
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "call_1", "name": "delegate", "arguments": {"target": "subagent"}},
+            )
+        )
+
+        # Convert to ChatResponse - finish_reason should be normalized
+        response = accumulator.to_chat_response()
+
+        assert response.tool_calls is not None
+        assert len(response.tool_calls) == 1
+        # CRITICAL: finish_reason must be "tool_use" even without TURN_COMPLETE
+        assert response.finish_reason == "tool_use", (
+            f"Expected finish_reason='tool_use' for tool calls, got '{response.finish_reason}'. "
+            "This causes the orchestrator to drop to interactive mode prematurely."
+        )
+
+    def test_finish_reason_end_turn_when_no_tools(self) -> None:
+        """streaming-contract:FinishReason:MUST:5.
+
+        finish_reason="end_turn" when no tool_calls.
+
+        When no tools are captured and no TURN_COMPLETE arrives (edge case),
+        finish_reason should default to "end_turn" for text-only responses.
+        """
+        accumulator = StreamingAccumulator()
+
+        # Add text content only - no tools
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Hello, world!"},
+                block_type="text",
+            )
+        )
+
+        response = accumulator.to_chat_response()
+
+        assert response.tool_calls is None or len(response.tool_calls) == 0
+        # Should default to end_turn when no tools
+        assert response.finish_reason in ("end_turn", "stop"), (
+            f"Expected finish_reason='end_turn' or 'stop', got '{response.finish_reason}'"
+        )
+
+    def test_finish_reason_preserved_when_turn_complete_received(self) -> None:
+        """TURN_COMPLETE finish_reason is preserved when received.
+
+        This tests the normal flow where TURN_COMPLETE arrives with a finish_reason.
+        The SDK-provided finish_reason should be used.
+        """
+        accumulator = StreamingAccumulator()
+
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.CONTENT_DELTA,
+                data={"text": "Response text"},
+                block_type="text",
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        # SDK-provided finish_reason should be preserved for text-only responses
+        assert response.finish_reason == "stop"
+
+    def test_finish_reason_overridden_to_tool_use_when_sdk_sends_stop_with_tools(self) -> None:
+        """streaming-contract:FinishReason:MUST:5 — tool_use overrides SDK finish_reason.
+
+        Critical bug fix: When SDK sends TURN_COMPLETE with finish_reason="stop"
+        but there are tool_calls, we MUST override to "tool_use".
+
+        This scenario happens when:
+        1. SDK returns tool calls in ASSISTANT_MESSAGE
+        2. preToolUse hook denies execution
+        3. SDK sends TURN_COMPLETE with finish_reason="stop" (normal completion)
+        4. We capture the tool calls and need to tell orchestrator to execute them
+
+        If we don't override to "tool_use", Amplifier's orchestrator thinks the
+        conversation is complete and drops to interactive mode prematurely.
+        """
+        accumulator = StreamingAccumulator()
+
+        # Simulate: SDK returns tool call, then TURN_COMPLETE with "stop"
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "call_1", "name": "delegate", "arguments": {"target": "subagent"}},
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        # CRITICAL: Must be "tool_use" even though SDK sent "stop"
+        assert response.tool_calls is not None
+        assert len(response.tool_calls) == 1
+        assert response.finish_reason == "tool_use", (
+            f"Expected finish_reason='tool_use' to override SDK's 'stop' when tool_calls present. "
+            f"Got '{response.finish_reason}'. This causes premature exit to interactive mode."
+        )

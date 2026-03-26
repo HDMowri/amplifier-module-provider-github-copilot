@@ -6,17 +6,24 @@ GitHub Copilot provider for [Amplifier](https://github.com/microsoft/amplifier).
 
 ```
 amplifier_module_provider_github_copilot/
-├── provider.py          # Entry point: mount(), get_info(), list_models(), complete()
-├── completion.py        # LLM call lifecycle, streaming
+├── __init__.py          # Entry point: mount(), get_info()
+├── provider.py          # Provider class: list_models(), complete()
 ├── streaming.py         # SDK event → domain event translation
 ├── error_translation.py # SDK error → kernel error mapping
 ├── config_loader.py     # YAML config loading
 ├── models.py            # Data structures
+├── request_adapter.py   # ChatRequest → internal request conversion
+├── observability.py     # Hook event emission, timing
+├── tool_parsing.py      # Tool call extraction from response
+├── fake_tool_detection.py # Detect/correct fake tool calls
+├── model_cache.py       # SDK model list caching
+├── security_redaction.py # Sensitive data redaction
 ├── config/              # YAML configuration files
 │   ├── models.yaml      # Default model, provider metadata
 │   ├── errors.yaml      # Error translation rules
 │   ├── events.yaml      # Event classification
-│   └── retry.yaml       # Retry policy
+│   ├── retry.yaml       # Retry policy
+│   └── observability.yaml # Hook event names
 └── sdk_adapter/         # SDK isolation layer
     ├── _imports.py      # Only file with SDK imports
     ├── client.py        # Session lifecycle
@@ -42,7 +49,7 @@ Sessions are created per `complete()` call and destroyed after the first turn. N
 
 ### Error Translation
 
-SDK errors are translated to `amplifier_core.llm_errors.*` types via config-driven pattern matching. No custom exception classes.
+SDK errors are translated to `amplifier_core.llm_errors.*` types via config-driven pattern matching. `ConfigurationError` is the only custom exception (for config loading failures).
 
 ## Contracts
 

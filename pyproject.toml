@@ -80,8 +80,11 @@ pythonVersion = "3.11"
 typeCheckingMode = "strict"
 include = ["amplifier_module_provider_github_copilot", "tests"]
 exclude = ["run_*.py"]
-# Use system Python where amplifier-core is installed
-pythonPlatform = "Linux"
+# Custom type stubs for external packages (copilot SDK, amplifier-core)
+stubPath = "typings"
+# Use local venv for package resolution
+venvPath = "."
+venv = ".venv"
 # Exclude stub-related errors for pytest (has inline types but pyright strict mode is pedantic)
 reportMissingTypeStubs = false
 
@@ -95,9 +98,6 @@ asyncio_mode = "auto"
 # Contract: tests run and FAIL if credentials missing, never skip
 addopts = "-m 'not live'"
 markers = [
-    "contract: marks tests as contract compliance (run with -m contract)",
-    "pure: marks tests as pure/no-IO (run with -m pure)",
-    "canary: marks tests as SDK canary (run with -m canary)",
     "live: marks tests requiring real credentials (run explicitly with -m live)",
     "sdk_assumption: marks tests verifying SDK types/shapes exist",
 ]

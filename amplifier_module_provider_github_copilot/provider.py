@@ -36,8 +36,6 @@ from amplifier_core import (
     ToolCall,
 )
 
-# Re-exports for backward compatibility
-from .completion import complete, complete_and_collect
 from .config_loader import (
     ProviderConfig,
     RetryConfig,
@@ -88,20 +86,20 @@ from .request_adapter import (
 from .request_adapter import (
     extract_prompt_from_chat_request as _extract_prompt_from_chat_request,
 )
-from .sdk_adapter.client import CopilotClientWrapper
-from .sdk_adapter.event_helpers import (
-    extract_event_type,
-    is_error_event,
-    is_idle_event,
-)
-from .sdk_adapter.extract import extract_event_fields
-from .sdk_adapter.tool_capture import ToolCaptureHandler
-from .sdk_adapter.types import (
+
+# Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
+from .sdk_adapter import (
     CompletionConfig,
     CompletionRequest,
+    CopilotClientWrapper,
     SDKCreateFn,
     SDKSession,
     SessionConfig,
+    ToolCaptureHandler,
+    extract_event_fields,
+    extract_event_type,
+    is_error_event,
+    is_idle_event,
 )
 from .streaming import (
     MAX_EXTRACTION_DEPTH,
@@ -120,9 +118,7 @@ from .tool_parsing import parse_tool_calls
 __all__ = [
     # Provider class
     "GitHubCopilotProvider",
-    # Completion module re-exports
-    "complete",
-    "complete_and_collect",
+    # SDK types
     "CompletionRequest",
     "CompletionConfig",
     "SDKCreateFn",
@@ -164,6 +160,36 @@ _get_retry_after = get_retry_after
 logger = logging.getLogger(__name__)
 
 
+def _extract_delta_text(sdk_event: Any) -> str | None:
+    """Extract text delta from an SDK streaming event.
+
+    Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
+
+    Handles SDK v0.2.0 nested data structure:
+    - event.data.delta_content for text deltas
+    - Direct string content as fallback
+
+    Args:
+        sdk_event: SDK SessionEvent object
+
+    Returns:
+        Extracted text delta or None if not found
+    """
+    # Try nested data structure first (SDK v0.2.0+)
+    sdk_data = getattr(sdk_event, "data", None)
+    if sdk_data is not None:
+        delta_content = getattr(sdk_data, "delta_content", None)
+        if delta_content and isinstance(delta_content, str):
+            return delta_content
+
+    # Fallback: check direct delta_content attribute
+    delta_content = getattr(sdk_event, "delta_content", None)
+    if delta_content and isinstance(delta_content, str):
+        return delta_content
+
+    return None
+
+
 class GitHubCopilotProvider:
     """Provider Protocol implementation for GitHub Copilot.
 
@@ -202,6 +228,23 @@ class GitHubCopilotProvider:
         self.coordinator = coordinator
         self._client = client if client is not None else CopilotClientWrapper()
         self._provider_config = load_models_config()
+        # Track pending streaming emit tasks for cleanup
+        # Contract: streaming-contract:ProgressiveStreaming:SHOULD:3
+        self._pending_emit_tasks: set[asyncio.Task[Any]] = set()
+
+    @property
+    def _effective_default_model(self) -> str:
+        """Get effective default model respecting runtime config.
+
+        Priority:
+        1. self.config["default_model"] — runtime config from mount/routing matrix
+        2. self._provider_config.defaults["model"] — YAML config
+
+        Contract: Three-Medium Architecture — runtime config overrides YAML.
+        Note: Does NOT mutate cached ProviderConfig (avoids race conditions
+        when multiple sub-agents mount with different configs).
+        """
+        return self.config.get("default_model") or self._provider_config.defaults["model"]
 
     @property
     def name(self) -> str:
@@ -302,7 +345,7 @@ class GitHubCopilotProvider:
         # Convert request using request_adapter module (separation of concerns)
         internal_request = convert_chat_request(
             request,
-            default_model=self._provider_config.defaults["model"],
+            default_model=self._effective_default_model,
         )
 
         # Use the SDK client wrapper for real SDK path
@@ -312,125 +355,111 @@ class GitHubCopilotProvider:
         event_config = load_event_config()
         obs_config = load_observability_config()
 
-        # Three-Medium: model from YAML config (validated at load time)
-        model = internal_request.model or self._provider_config.defaults["model"]
+        # Effective model: request.model > runtime config > YAML default
+        model = internal_request.model or self._effective_default_model
 
         # Create lifecycle context for observability (handles timing)
         async with llm_lifecycle(self.coordinator, model, obs_config) as ctx:
-            # Check for test injection first
-            sdk_create_fn = kwargs.get("sdk_create_fn")
-            if sdk_create_fn is not None:
-                # Test path: use injected SDK factory via completion module
-                # No hooks emitted in test path (sdk_create_fn is for legacy tests)
-                async for event in complete(
-                    internal_request,
-                    config=kwargs.get("config"),
-                    sdk_create_fn=sdk_create_fn,
-                ):
-                    accumulator.add(event)
-            else:
-                # Real SDK path: use client wrapper with STREAMING
-                # Three-Medium: timeout from YAML config
-                timeout_seconds: float = kwargs.get(
-                    "_timeout_seconds",
-                    float(self._provider_config.defaults["timeout"]),
-                )
+            # Real SDK path: use client wrapper with STREAMING
+            # Three-Medium: timeout from YAML config
+            timeout_seconds: float = kwargs.get(
+                "_timeout_seconds",
+                float(self._provider_config.defaults["timeout"]),
+            )
 
-                retry_config = load_retry_config()
+            retry_config = load_retry_config()
 
-                # Emit llm:request event (contract: observability:Events:MUST:2)
-                use_streaming = self.config.get("use_streaming", True)
-                await ctx.emit_request(
-                    message_count=len(getattr(request, "messages", [])),
-                    tool_count=len(internal_request.tools) if internal_request.tools else 0,
-                    streaming=use_streaming,
-                    timeout=timeout_seconds,
-                )
+            # Emit llm:request event (contract: observability:Events:MUST:2)
+            use_streaming = self.config.get("use_streaming", True)
+            await ctx.emit_request(
+                message_count=len(getattr(request, "messages", [])),
+                tool_count=len(internal_request.tools) if internal_request.tools else 0,
+                streaming=use_streaming,
+                timeout=timeout_seconds,
+            )
 
-                for attempt in range(retry_config.max_attempts):
-                    try:
-                        await self._execute_sdk_completion(
-                            client=self._client,
-                            model=model,
-                            prompt=internal_request.prompt,
-                            timeout=timeout_seconds,
-                            event_config=event_config,
-                            accumulator=accumulator,
-                            tools=internal_request.tools or None,
-                            attachments=internal_request.attachments or None,
+            for attempt in range(retry_config.max_attempts):
+                try:
+                    await self._execute_sdk_completion(
+                        client=self._client,
+                        model=model,
+                        prompt=internal_request.prompt,
+                        timeout=timeout_seconds,
+                        event_config=event_config,
+                        accumulator=accumulator,
+                        tools=internal_request.tools or None,
+                        attachments=internal_request.attachments or None,
+                    )
+                    break  # Success
+
+                except LLMError as e:
+                    if not is_retryable_error(e):
+                        await ctx.emit_response_error(
+                            error_type=type(e).__name__,
+                            error_message=str(e),
                         )
-                        break  # Success
+                        raise
 
-                    except LLMError as e:
-                        if not is_retryable_error(e):
-                            await ctx.emit_response_error(
-                                error_type=type(e).__name__,
-                                error_message=str(e),
-                            )
-                            raise
-
-                        if attempt < retry_config.max_attempts - 1:
-                            delay_ms = self._calculate_retry_delay(e, attempt, retry_config)
-                            logger.info(
-                                "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
-                                attempt + 1,
-                                retry_config.max_attempts,
-                                e,
-                                delay_ms,
-                            )
-                            await ctx.emit_retry(
-                                attempt=attempt + 1,
-                                max_retries=retry_config.max_attempts,
-                                delay=delay_ms / 1000,
-                                error_type=type(e).__name__,
-                                error_message=str(e),
-                            )
-                            await asyncio.sleep(delay_ms / 1000)
-                        else:
-                            await ctx.emit_response_error(
-                                error_type=type(e).__name__,
-                                error_message=str(e),
-                            )
-                            raise
-
-                    except Exception as e:
-                        error_config_for_err = load_error_config()
-                        translated = translate_sdk_error(
-                            e, error_config_for_err, provider="github-copilot", model=model
+                    if attempt < retry_config.max_attempts - 1:
+                        delay_ms = self._calculate_retry_delay(e, attempt, retry_config)
+                        logger.info(
+                            "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
+                            attempt + 1,
+                            retry_config.max_attempts,
+                            e,
+                            delay_ms,
                         )
+                        await ctx.emit_retry(
+                            attempt=attempt + 1,
+                            max_retries=retry_config.max_attempts,
+                            delay=delay_ms / 1000,
+                            error_type=type(e).__name__,
+                            error_message=str(e),
+                        )
+                        await asyncio.sleep(delay_ms / 1000)
+                    else:
+                        await ctx.emit_response_error(
+                            error_type=type(e).__name__,
+                            error_message=str(e),
+                        )
+                        raise
 
-                        if not is_retryable_error(translated):
-                            await ctx.emit_response_error(
-                                error_type=type(translated).__name__,
-                                error_message=str(translated),
-                            )
-                            raise translated from e
+                except Exception as e:
+                    error_config_for_err = load_error_config()
+                    translated = translate_sdk_error(
+                        e, error_config_for_err, provider="github-copilot", model=model
+                    )
 
-                        if attempt < retry_config.max_attempts - 1:
-                            delay_ms = self._calculate_retry_delay(
-                                translated, attempt, retry_config
-                            )
-                            logger.info(
-                                "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
-                                attempt + 1,
-                                retry_config.max_attempts,
-                                translated,
-                                delay_ms,
-                            )
-                            await ctx.emit_retry(
-                                attempt=attempt + 1,
-                                max_retries=retry_config.max_attempts,
-                                delay=delay_ms / 1000,
-                                error_type=type(translated).__name__,
-                                error_message=str(translated),
-                            )
-                            await asyncio.sleep(delay_ms / 1000)
-                        else:
-                            await ctx.emit_response_error(
-                                error_type=type(translated).__name__,
-                                error_message=str(translated),
-                            )
-                            raise translated from e
+                    if not is_retryable_error(translated):
+                        await ctx.emit_response_error(
+                            error_type=type(translated).__name__,
+                            error_message=str(translated),
+                        )
+                        raise translated from e
+
+                    if attempt < retry_config.max_attempts - 1:
+                        delay_ms = self._calculate_retry_delay(translated, attempt, retry_config)
+                        logger.info(
+                            "[RETRY] Attempt %d/%d failed: %s. Retrying in %.0fms",
+                            attempt + 1,
+                            retry_config.max_attempts,
+                            translated,
+                            delay_ms,
+                        )
+                        await ctx.emit_retry(
+                            attempt=attempt + 1,
+                            max_retries=retry_config.max_attempts,
+                            delay=delay_ms / 1000,
+                            error_type=type(translated).__name__,
+                            error_message=str(translated),
+                        )
+                        await asyncio.sleep(delay_ms / 1000)
+                    else:
+                        await ctx.emit_response_error(
+                            error_type=type(translated).__name__,
+                            error_message=str(translated),
+                        )
+                        raise translated from e
 
             # Fake tool call detection and retry
             ftd_config = load_fake_tool_detection_config()
@@ -462,46 +491,26 @@ class GitHubCopilotProvider:
                 )
                 accumulator = StreamingAccumulator()
 
-                if sdk_create_fn is not None:
-                    raw_tools = internal_request.tools or []
-                    # Convert tools to dict format for CompletionRequest
-                    tools_for_retry: list[dict[str, Any]] = [
-                        dict(t)
-                        if hasattr(t, "keys")
-                        else (t.__dict__.copy() if hasattr(t, "__dict__") else {"name": str(t)})
-                        for t in raw_tools
-                    ]
-                    async for event in complete(
-                        CompletionRequest(
-                            prompt=corrected_prompt,
-                            model=internal_request.model,
-                            tools=tools_for_retry,
-                        ),
-                        config=kwargs.get("config"),
-                        sdk_create_fn=sdk_create_fn,
-                    ):
-                        accumulator.add(event)
-                else:
-                    # Three-Medium: timeout from YAML config
-                    timeout_seconds_retry: float = kwargs.get(
-                        "_timeout_seconds",
-                        float(self._provider_config.defaults["timeout"]),
+                # Three-Medium: timeout from YAML config
+                timeout_seconds_retry: float = kwargs.get(
+                    "_timeout_seconds",
+                    float(self._provider_config.defaults["timeout"]),
+                )
+                try:
+                    # Note: attachments=None for correction - the model already saw the image
+                    await self._execute_sdk_completion(
+                        client=self._client,
+                        model=model,
+                        prompt=corrected_prompt,
+                        timeout=timeout_seconds_retry,
+                        event_config=event_config,
+                        accumulator=accumulator,
+                        tools=internal_request.tools or None,
+                        attachments=None,
                     )
-                    try:
-                        # Note: attachments=None for correction - the model already saw the image
-                        await self._execute_sdk_completion(
-                            client=self._client,
-                            model=model,
-                            prompt=corrected_prompt,
-                            timeout=timeout_seconds_retry,
-                            event_config=event_config,
-                            accumulator=accumulator,
-                            tools=internal_request.tools or None,
-                            attachments=None,
-                        )
-                    except Exception:
-                        log_exhausted(ftd_config, correction_attempt + 1)
-                        break
+                except Exception:
+                    log_exhausted(ftd_config, correction_attempt + 1)
+                    break
             else:
                 log_exhausted(ftd_config, ftd_config.max_correction_attempts)
 
@@ -564,13 +573,16 @@ class GitHubCopilotProvider:
         """
         # Load SDK protection config for tool capture and session management
         sdk_protection = load_sdk_protection_config()
-        # Load streaming config for TTFT warning
-        # Contract: behaviors:Streaming:MUST:1
+        # Load streaming config for TTFT warning and bounded queue
+        # Contract: behaviors:Streaming:MUST:1, MUST:4
         streaming_config = load_streaming_config()
 
         async with asyncio.timeout(timeout):
             async with client.session(model=model, tools=tools) as sdk_session:
-                event_queue: asyncio.Queue[Any] = asyncio.Queue()
+                # Contract: behaviors:Streaming:MUST:4 — bounded queue, drop on full
+                event_queue: asyncio.Queue[Any] = asyncio.Queue(
+                    maxsize=streaming_config.event_queue_size
+                )
                 idle_event = asyncio.Event()
                 error_holder: list[Exception] = []
                 # TTFT tracking state (mutable container for closure)
@@ -584,6 +596,10 @@ class GitHubCopilotProvider:
                     config=sdk_protection.tool_capture,
                 )
 
+                # Create closure for progressive streaming emission
+                # Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
+                provider_self = self
+
                 def event_handler(
                     sdk_event: Any,
                     *,
@@ -593,6 +609,8 @@ class GitHubCopilotProvider:
                     capture_handler: ToolCaptureHandler = tool_capture_handler,
                     ttft: dict[str, Any] = ttft_state,
                     ttft_threshold_ms: int = streaming_config.ttft_warning_ms,
+                    provider: Any = provider_self,
+                    evt_config: EventConfig = event_config,
                 ) -> None:
                     """Push SDK events to queue for async processing.
 
@@ -600,55 +618,82 @@ class GitHubCopilotProvider:
                     B023: Loop variables bound via default args.
                     Contract: streaming-contract:abort-on-capture:MUST:1
                     Contract: behaviors:Streaming:MUST:1 (TTFT warning)
+                    Contract: behaviors:Streaming:MUST:4 (bounded queue, drop on full)
                     """
+                    # ALWAYS check for idle event first - critical for session completion
+                    # This ensures idle signal is set even if queue is full
+                    event_type = extract_event_type(sdk_event)
+                    if is_idle_event(event_type):
+                        idle.set()
+                        # Still try to queue it for completeness
+
                     try:
                         queue.put_nowait(sdk_event)
-                        event_type = extract_event_type(sdk_event)
+                    except asyncio.QueueFull:
+                        # Contract: behaviors:Streaming:MUST:4 — drop on full, don't block
+                        # Debug level: deltas are internal (final message has complete text)
+                        # Aligns with OpenAI/Anthropic providers that don't expose deltas
+                        logger.debug(
+                            "[STREAMING] Event queue full, dropping delta: %s",
+                            event_type,
+                        )
+                        return  # Don't process dropped events further
 
-                        # TTFT check on first content event
-                        # Contract: behaviors:Streaming:MUST:1
-                        if not ttft["checked"]:
-                            content_types = {
-                                "assistant.message_delta",
-                                "assistant.streaming_delta",
-                                "assistant.reasoning_delta",
-                            }
-                            if event_type in content_types:
-                                ttft["checked"] = True
-                                elapsed_ms = (time.time() - ttft["start_time"]) * 1000
-                                if elapsed_ms > ttft_threshold_ms:
-                                    logger.warning(
-                                        "[TTFT] Slow time to first token: %.0fms (threshold: %dms)",
-                                        elapsed_ms,
-                                        ttft_threshold_ms,
-                                    )
-                        if is_idle_event(event_type):
-                            idle.set()
-                        elif is_error_event(event_type):
-                            sdk_event_str = str(sdk_event)
-                            data: Any
-                            if isinstance(sdk_event, dict):
-                                typed_evt = cast(dict[str, Any], sdk_event)
-                                data = typed_evt.get("data")
-                            else:
-                                data = getattr(sdk_event, "data", None)
-                            error_msg: str
-                            if data is None:
-                                error_msg = sdk_event_str
-                            elif isinstance(data, dict):
-                                typed_data = cast(dict[str, Any], data)
-                                msg_val = typed_data.get("message")
-                                error_msg = str(msg_val) if msg_val is not None else sdk_event_str
-                            else:
-                                error_msg = str(getattr(data, "message", sdk_event_str))
-                            err = Exception(f"Session error: {error_msg}")
-                            errors.append(err)
-                            idle.set()
+                    # TTFT check on first content event
+                    # Contract: behaviors:Streaming:MUST:1
+                    # Three-Medium Architecture: content event types loaded from YAML
+                    if not ttft["checked"]:
+                        if event_type in evt_config.content_event_types:
+                            ttft["checked"] = True
+                            elapsed_ms = (time.time() - ttft["start_time"]) * 1000
+                            if elapsed_ms > ttft_threshold_ms:
+                                logger.warning(
+                                    "[TTFT] Slow time to first token: %.0fms (threshold: %dms)",
+                                    elapsed_ms,
+                                    ttft_threshold_ms,
+                                )
+
+                    # Progressive streaming: emit content deltas for real-time UI
+                    # Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
+                    # Three-Medium Architecture: emission types loaded from YAML
+                    if event_type in evt_config.text_content_types:
+                        # Extract text delta from SDK event
+                        delta_text = _extract_delta_text(sdk_event)
+                        if delta_text:
+                            from amplifier_core import TextContent
+
+                            provider._emit_streaming_content(TextContent(text=delta_text))
+                    elif event_type in evt_config.thinking_content_types:
+                        # Extract thinking delta from SDK event
+                        delta_text = _extract_delta_text(sdk_event)
+                        if delta_text:
+                            from amplifier_core import ThinkingContent
+
+                            provider._emit_streaming_content(ThinkingContent(text=delta_text))
+
+                    if is_error_event(event_type):
+                        sdk_event_str = str(sdk_event)
+                        data: Any
+                        if isinstance(sdk_event, dict):
+                            typed_evt = cast(dict[str, Any], sdk_event)
+                            data = typed_evt.get("data")
                         else:
-                            # Delegate tool capture to handler
-                            capture_handler.on_event(sdk_event)
-                    except Exception as e:
-                        logger.warning("Error in event handler: %s", e)
+                            data = getattr(sdk_event, "data", None)
+                        error_msg: str
+                        if data is None:
+                            error_msg = sdk_event_str
+                        elif isinstance(data, dict):
+                            typed_data = cast(dict[str, Any], data)
+                            msg_val = typed_data.get("message")
+                            error_msg = str(msg_val) if msg_val is not None else sdk_event_str
+                        else:
+                            error_msg = str(getattr(data, "message", sdk_event_str))
+                        err = Exception(f"Session error: {error_msg}")
+                        errors.append(err)
+                        idle.set()
+                    elif not is_idle_event(event_type):
+                        # Delegate tool capture to handler (for non-idle events)
+                        capture_handler.on_event(sdk_event)
 
                 unsubscribe = sdk_session.on(event_handler)
                 try:
@@ -714,15 +759,89 @@ class GitHubCopilotProvider:
                 finally:
                     unsubscribe()
 
+    # =========================================================================
+    # Progressive Streaming Emission
+    # Contract: streaming-contract:ProgressiveStreaming:SHOULD:1-4
+    # =========================================================================
+
+    def _emit_streaming_content(
+        self,
+        content: Any,
+    ) -> None:
+        """Emit streaming content for real-time UI updates.
+
+        Fire-and-forget pattern: creates async task, doesn't block.
+        Contract: streaming-contract:ProgressiveStreaming:SHOULD:1-4
+
+        Args:
+            content: Content block to emit (TextContent, ThinkingContent, ToolCallContent)
+        """
+        # SHOULD:4 — gracefully skip when no coordinator or hooks
+        if not self.coordinator or not hasattr(self.coordinator, "hooks"):
+            return
+
+        # SHOULD:2 — fire-and-forget async emission
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(
+                self._emit_content_async(content),
+                name=f"emit_content_{id(content)}",
+            )
+            # SHOULD:3 — track pending tasks for cleanup
+            self._pending_emit_tasks.add(task)
+            task.add_done_callback(self._pending_emit_tasks.discard)
+            # Handle errors silently to avoid blocking
+            task.add_done_callback(self._handle_emit_task_exception)
+        except RuntimeError:
+            # No running loop - skip emission
+            logger.debug("[PROVIDER] No running event loop for streaming emission")
+
+    async def _emit_content_async(self, content: Any) -> None:
+        """Async helper to emit content through hooks.
+
+        Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
+        """
+        # Guard against None coordinator (shouldn't happen due to _emit_streaming_content check)
+        if self.coordinator is None:
+            return
+        try:
+            await self.coordinator.hooks.emit(
+                "llm:content_block",
+                {
+                    "provider": self.name,
+                    "content": content,
+                },
+            )
+        except Exception as e:
+            logger.debug("[PROVIDER] Content emit failed: %s", e)
+
+    def _handle_emit_task_exception(self, task: asyncio.Task[Any]) -> None:
+        """Handle exceptions from emit tasks silently.
+
+        Prevents unhandled task exception warnings while still logging.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.debug("[PROVIDER] Emit task failed: %s", exc)
+
     async def close(self) -> None:
         """Clean up provider resources.
 
         Contract: provider-protocol:close:MUST:1 — must clean up SDK resources
         Contract: sdk-boundary.md — provider must clean up SDK resources on close
+        Contract: streaming-contract:ProgressiveStreaming:SHOULD:3 — clean up emit tasks
 
         Delegates to client.close() for SDK resource cleanup.
         Safe to call multiple times (idempotent).
         """
+        # Cancel pending emit tasks
+        for task in self._pending_emit_tasks:
+            if not task.done():
+                task.cancel()
+        self._pending_emit_tasks.clear()
+
         if hasattr(self, "_client") and self._client:
             await self._client.close()
 

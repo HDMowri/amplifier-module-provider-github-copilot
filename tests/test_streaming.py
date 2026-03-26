@@ -824,3 +824,166 @@ class TestStreamingChatResponse:
         assert "TextContent" in types
         assert "ThinkingContent" in types
         assert "ToolCallContent" in types
+
+
+# ============================================================================
+# Contract: streaming-contract:ProgressiveStreaming:SHOULD:1-4
+# ============================================================================
+
+
+class TestProgressiveStreamingEmission:
+    """Tests for progressive streaming event emission.
+
+    Contract: streaming-contract:ProgressiveStreaming:SHOULD:1-4
+
+    These tests verify that the provider emits llm:content_block events
+    for real-time UI updates as content arrives from the SDK.
+    """
+
+    def test_emit_streaming_content_fires_hook(self) -> None:
+        """streaming-contract:ProgressiveStreaming:SHOULD:1.
+
+        Provider SHOULD emit llm:content_block events when coordinator has hooks.
+        """
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_core import TextContent
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        # Create provider with mock coordinator
+        coordinator = MagicMock()
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock()
+
+        provider = GitHubCopilotProvider(
+            config={},
+            coordinator=coordinator,
+        )
+
+        content = TextContent(text="Hello")
+
+        # Must run in event loop for fire-and-forget task creation
+        async def run_test() -> None:
+            provider._emit_streaming_content(content)  # pyright: ignore[reportPrivateUsage]
+            # Give task time to run
+            await asyncio.sleep(0.01)
+
+        asyncio.run(run_test())
+
+        # Verify hook was called with llm:content_block
+        coordinator.hooks.emit.assert_called()
+        call_args = coordinator.hooks.emit.call_args
+        assert call_args[0][0] == "llm:content_block"
+        assert call_args[0][1]["provider"] == "github-copilot"
+        assert call_args[0][1]["content"] == content
+
+    def test_emit_streaming_content_skips_without_coordinator(self) -> None:
+        """streaming-contract:ProgressiveStreaming:SHOULD:4.
+
+        Provider SHOULD gracefully skip emission when no coordinator.
+        """
+        from amplifier_core import TextContent
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        # Create provider without coordinator
+        provider = GitHubCopilotProvider(
+            config={},
+            coordinator=None,
+        )
+
+        content = TextContent(text="Hello")
+
+        # Should not raise
+        provider._emit_streaming_content(content)  # pyright: ignore[reportPrivateUsage]
+
+    def test_emit_streaming_content_skips_without_hooks(self) -> None:
+        """streaming-contract:ProgressiveStreaming:SHOULD:4.
+
+        Provider SHOULD gracefully skip emission when coordinator has no hooks.
+        """
+        from unittest.mock import MagicMock
+
+        from amplifier_core import TextContent
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        # Create provider with coordinator but no hooks attribute
+        coordinator = MagicMock(spec=[])  # No hooks attribute
+
+        provider = GitHubCopilotProvider(
+            config={},
+            coordinator=coordinator,
+        )
+
+        content = TextContent(text="Hello")
+
+        # Should not raise
+        provider._emit_streaming_content(content)  # pyright: ignore[reportPrivateUsage]
+
+    def test_emit_streaming_content_handles_emit_error(self) -> None:
+        """streaming-contract:ProgressiveStreaming:SHOULD:2.
+
+        Async emit should handle errors gracefully without blocking.
+        """
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_core import TextContent
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        # Create provider with mock coordinator that raises
+        coordinator = MagicMock()
+        coordinator.hooks = MagicMock()
+        coordinator.hooks.emit = AsyncMock(side_effect=Exception("Hook broke"))
+
+        provider = GitHubCopilotProvider(
+            config={},
+            coordinator=coordinator,
+        )
+
+        content = TextContent(text="Hello")
+
+        async def run_test() -> None:
+            # Should not raise even when hook fails
+            provider._emit_streaming_content(content)  # pyright: ignore[reportPrivateUsage]
+            await asyncio.sleep(0.01)
+
+        # Should not raise
+        asyncio.run(run_test())
+
+    def test_pending_emit_tasks_tracked(self) -> None:
+        """streaming-contract:ProgressiveStreaming:SHOULD:3.
+
+        Provider SHOULD track pending emit tasks for cleanup.
+        """
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_core import TextContent
+
+        from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+
+        coordinator = MagicMock()
+        coordinator.hooks = MagicMock()
+        # Make emit wait so task stays pending
+        coordinator.hooks.emit = AsyncMock(
+            side_effect=lambda *a: asyncio.sleep(0.1)  # pyright: ignore[reportUnknownLambdaType]
+        )
+
+        provider = GitHubCopilotProvider(
+            config={},
+            coordinator=coordinator,
+        )
+
+        content = TextContent(text="Hello")
+
+        async def run_test() -> None:
+            provider._emit_streaming_content(content)  # pyright: ignore[reportPrivateUsage]
+            # Task should be tracked
+            assert len(provider._pending_emit_tasks) == 1  # pyright: ignore[reportPrivateUsage]
+
+        asyncio.run(run_test())
