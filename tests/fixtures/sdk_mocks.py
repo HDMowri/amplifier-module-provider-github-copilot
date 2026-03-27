@@ -25,6 +25,7 @@ class SessionEventType(Enum):
     """Mock of SDK SessionEventType enum.
 
     Values match SDK SessionEventType from github-copilot-sdk.
+    P2-8: Added UNKNOWN type to match real SDK behavior.
     """
 
     SESSION_IDLE = "session.idle"
@@ -35,6 +36,8 @@ class SessionEventType(Enum):
     ASSISTANT_REASONING_DELTA = "assistant.reasoning_delta"
     ASSISTANT_USAGE = "assistant.usage"
     TOOL_EXECUTION_COMPLETE = "tool.execution_complete"
+    # P2-8: UNKNOWN type for unrecognized events (real SDK uses this)
+    UNKNOWN = "unknown"
     # Legacy aliases for test compatibility
     MESSAGE_COMPLETE = "message_complete"
     TOOL_USE_COMPLETE = "tool_use_complete"
@@ -54,6 +57,8 @@ class SessionEventData:
     - reasoning_text: Extended thinking text
     - text: DEPRECATED - kept for backward compatibility in test dict conversion
     - tool_call_id/tool_name/arguments: Tool execution events
+    - ephemeral: P2-8 — Whether message is ephemeral (thinking/reasoning)
+    - parent_id: P2-8 — Parent message ID for threading
     """
 
     # SDK v0.1.33+ fields
@@ -78,6 +83,10 @@ class SessionEventData:
     output_tokens: int | None = None
     total_tokens: int | None = None
     tool_requests: list[dict[str, Any]] | None = None
+
+    # P2-8: Missing fields from real SDK
+    ephemeral: bool = False  # Whether message is ephemeral (thinking/reasoning)
+    parent_id: str | None = None  # Parent message ID for threading
 
 
 @dataclass

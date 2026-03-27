@@ -94,7 +94,12 @@ def load_models_config() -> ProviderConfig:
         with config_path.open(encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except Exception as e:
-        logger.warning("[CONFIG_VALIDATION] Failed to parse models.yaml: %s", e)
+        from .security_redaction import redact_sensitive_text
+
+        logger.warning(
+            "[CONFIG_VALIDATION] Failed to parse models.yaml: %s",
+            redact_sensitive_text(e),
+        )
         raise ConfigurationError(
             f"Config validation failed: models.yaml is corrupted ({type(e).__name__}). "
             "Reinstall the package to restore config files.",

@@ -47,6 +47,78 @@ SDKSession = Any
 
 
 # ============================================================================
+# Session Handle (Façade for SDK Session)
+# P2-11: SDK membrane - return façade, not raw SDK session
+# Contract: sdk-boundary:Membrane:MUST:2, sdk-boundary:TypeTranslation:MUST:4
+# ============================================================================
+
+
+class SessionHandle:
+    """Façade for SDK session that hides SDK internals.
+
+    P2-11: This class is the ONLY interface provider.py should use to interact
+    with SDK sessions. It ensures SDK types don't leak through the membrane.
+
+    Contract: sdk-boundary:TypeTranslation:MUST:4 — Use opaque handles, not SDK objects
+
+    Attributes:
+        _raw_session: Internal SDK session (NEVER expose directly)
+        session_id: Opaque string identifier for the session
+    """
+
+    __slots__ = ("_raw_session", "session_id")
+
+    def __init__(self, raw_session: Any, session_id: str | None = None) -> None:
+        """Create a session handle wrapping a raw SDK session.
+
+        Args:
+            raw_session: The raw SDK session object (kept private).
+            session_id: Optional session identifier for logging.
+        """
+        self._raw_session = raw_session
+        self.session_id = session_id or getattr(raw_session, "session_id", "unknown")
+
+    def on(self, handler: Callable[[Any], None]) -> Callable[[], None]:
+        """Subscribe to session events.
+
+        Args:
+            handler: Callback function to receive events.
+
+        Returns:
+            Unsubscribe function.
+        """
+        return self._raw_session.on(handler)  # type: ignore[no-any-return]
+
+    async def send(
+        self,
+        prompt: str,
+        *,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Send a message to the session.
+
+        Args:
+            prompt: The text prompt to send.
+            attachments: Optional list of attachment dicts.
+        """
+        if attachments:
+            await self._raw_session.send(prompt, attachments=attachments)
+        else:
+            await self._raw_session.send(prompt)
+
+    async def abort(self) -> None:
+        """Abort the session."""
+        await self._raw_session.abort()
+
+    def __repr__(self) -> str:
+        """String representation for debugging."""
+        return f"SessionHandle(session_id={self.session_id!r})"
+
+
+SDKSession = Any
+
+
+# ============================================================================
 # Completion Types
 # ============================================================================
 

@@ -125,9 +125,7 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
         else:
             supports_vision = supports.vision if supports.vision is not None else False
             supports_reasoning_effort = (
-                supports.reasoning_effort
-                if supports.reasoning_effort is not None
-                else False
+                supports.reasoning_effort if supports.reasoning_effort is not None else False
             )
 
     # Extract reasoning effort fields

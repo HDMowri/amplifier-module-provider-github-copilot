@@ -55,7 +55,9 @@ error_mappings:
   # P1: Context/token limit errors
   # SDK returns CAPIError: 400 for prompt length violations
   # Example: "prompt is too long: 208468 tokens > 200000 maximum"
-  - sdk_patterns: ["ContextLengthError", "CAPIError"]
+  # NOTE: CAPIError removed from sdk_patterns to avoid shadowing image validation errors.
+  # Context length CAPIErrors are caught by string_patterns instead.
+  - sdk_patterns: ["ContextLengthError"]
     string_patterns: ["413", "token count", "exceeds the limit", "context length", "too many tokens", "prompt is too long", "tokens >", "> maximum"]
     kernel_error: ContextLengthError
     retryable: false

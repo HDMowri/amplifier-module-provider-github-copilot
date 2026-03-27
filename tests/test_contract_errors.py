@@ -185,3 +185,86 @@ class TestErrorConfigFile:
         content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         assert "version" in content, "errors.yaml should have version field"
+
+
+class TestConcreteErrorTranslation:
+    """P2-7 FIX: Test actual error translation behavior with concrete inputs/outputs.
+
+    These tests verify the error translation produces specific kernel error types,
+    not just that returned values have correct structure.
+    """
+
+    def test_rate_limit_error_translation(self, error_config: ErrorConfig) -> None:
+        """P2-7: RateLimitException → RateLimitError with retryable=True."""
+        from amplifier_module_provider_github_copilot.error_translation import (
+            RateLimitError,
+            translate_sdk_error,
+        )
+
+        # Create exception matching SDK rate limit pattern
+        class RateLimitException(Exception):
+            """Mock SDK rate limit exception."""
+
+            pass
+
+        exc = RateLimitException("429 rate limit exceeded")
+        result = translate_sdk_error(exc, error_config)
+
+        assert isinstance(result, RateLimitError), f"Expected RateLimitError, got {type(result)}"
+        assert result.retryable is True, "RateLimitError MUST be retryable"
+
+    def test_auth_error_translation(self, error_config: ErrorConfig) -> None:
+        """P2-7: Authentication errors → AuthenticationError with retryable=False."""
+        from amplifier_module_provider_github_copilot.error_translation import (
+            AuthenticationError,
+            translate_sdk_error,
+        )
+
+        # Create exception matching SDK auth error pattern
+        class AuthError(Exception):
+            """Mock SDK auth exception."""
+
+            pass
+
+        exc = AuthError("401 Unauthorized")
+        result = translate_sdk_error(exc, error_config)
+
+        assert isinstance(result, AuthenticationError), (
+            f"Expected AuthenticationError, got {type(result)}"
+        )
+        assert result.retryable is False, "AuthenticationError MUST NOT be retryable"
+
+    def test_timeout_error_translation(self, error_config: ErrorConfig) -> None:
+        """P2-7: TimeoutException → LLMTimeoutError with retryable=True."""
+        from amplifier_module_provider_github_copilot.error_translation import (
+            LLMTimeoutError,
+            translate_sdk_error,
+        )
+
+        # Create exception matching SDK timeout pattern
+        class TimeoutException(Exception):
+            """Mock SDK timeout exception."""
+
+            pass
+
+        exc = TimeoutException("Request timed out after 3600 seconds")
+        result = translate_sdk_error(exc, error_config)
+
+        assert isinstance(result, LLMTimeoutError), f"Expected LLMTimeoutError, got {type(result)}"
+        assert result.retryable is True, "LLMTimeoutError MUST be retryable"
+
+    def test_unknown_error_fallback(self, error_config: ErrorConfig) -> None:
+        """P2-7: Unknown errors → default ProviderUnavailableError."""
+        from amplifier_module_provider_github_copilot.error_translation import (
+            ProviderUnavailableError,
+            translate_sdk_error,
+        )
+
+        exc = Exception("Some completely unknown error XYZ123")
+        result = translate_sdk_error(exc, error_config)
+
+        # Default fallback should be ProviderUnavailableError
+        assert isinstance(result, ProviderUnavailableError), (
+            f"Expected ProviderUnavailableError, got {type(result)}"
+        )
+        assert result.provider == "github-copilot"

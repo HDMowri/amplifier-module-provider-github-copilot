@@ -275,11 +275,15 @@ class GitHubCopilotProvider:
             try:
                 write_cache(copilot_models)
             except Exception as cache_err:
-                logger.warning("Failed to cache models: %s", cache_err)
+                from .security_redaction import redact_sensitive_text
+
+                logger.warning("Failed to cache models: %s", redact_sensitive_text(cache_err))
 
             return cast(list[ModelInfo], models)
         except Exception as sdk_err:
-            logger.warning("SDK list_models failed: %s", sdk_err)
+            from .security_redaction import redact_sensitive_text
+
+            logger.warning("SDK list_models failed: %s", redact_sensitive_text(sdk_err))
 
         # Tier 2: Try disk cache (fallback)
         cached_models = read_cache()
@@ -783,7 +787,9 @@ class GitHubCopilotProvider:
                 },
             )
         except Exception as e:
-            logger.debug("[PROVIDER] Content emit failed: %s", e)
+            from .security_redaction import redact_sensitive_text
+
+            logger.debug("[PROVIDER] Content emit failed: %s", redact_sensitive_text(e))
 
     def _handle_emit_task_exception(self, task: asyncio.Task[Any]) -> None:
         """Handle exceptions from emit tasks silently.
@@ -794,7 +800,9 @@ class GitHubCopilotProvider:
             return
         exc = task.exception()
         if exc:
-            logger.debug("[PROVIDER] Emit task failed: %s", exc)
+            from .security_redaction import redact_sensitive_text
+
+            logger.debug("[PROVIDER] Emit task failed: %s", redact_sensitive_text(exc))
 
     async def close(self) -> None:
         """Clean up provider resources.

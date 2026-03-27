@@ -101,7 +101,7 @@ def _create_session_config() -> dict[str, Any]:
     """Create standard session config for live tests.
 
     SDK v0.2.0: Config dict unpacked as kwargs to create_session().
-    Note: available_tools is NOT set (Bug #1 fix) - setting to [] disables tools
+    Contract v1.2: available_tools=[] when no tools provided (blocks SDK built-ins)
     """
     from amplifier_module_provider_github_copilot.sdk_adapter.client import (
         _make_deny_hook_config,  # pyright: ignore[reportPrivateUsage]
@@ -111,6 +111,9 @@ def _create_session_config() -> dict[str, Any]:
     return {
         "model": "gpt-4o",
         "streaming": True,
+        # Contract v1.2: available_tools MUST be set (not omitted)
+        # Empty list prevents SDK built-ins from appearing when no tools provided
+        "available_tools": [],
         # SDK v0.2.0: on_permission_request passed to create_session()
         "on_permission_request": deny_permission_request,
         "hooks": _make_deny_hook_config(),

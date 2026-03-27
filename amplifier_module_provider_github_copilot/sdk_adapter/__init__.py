@@ -9,7 +9,7 @@ Exports only domain types, not SDK-coupled internals.
 Domain types:
 - SessionConfig: Configuration for SDK session creation (domain wrapper)
 - SDKSession: Opaque session type alias
-- SessionHandle: Future UUID-based handle (roadmap)
+- SessionHandle: Façade wrapping SDK session (P2-11 membrane boundary)
 
 SDK Utilities (re-exported via membrane):
 - get_copilot_spec_origin: Locate SDK package without importing it
@@ -36,6 +36,7 @@ from .types import (
     SDKCreateFn,
     SDKSession,
     SessionConfig,
+    SessionHandle,
     extract_attachments_from_chat_request,
 )
 
@@ -46,6 +47,7 @@ __all__ = [
     "CopilotClientWrapper",  # Internal: provider.py needs this
     "SessionConfig",  # Domain type
     "SDKSession",  # Domain type alias
+    "SessionHandle",  # P2-11: Façade for SDK sessions (membrane boundary)
     "CompletionConfig",  # Domain type for completion settings
     "CompletionRequest",  # Domain type for completion input
     "SDKCreateFn",  # Type alias for SDK session factory

@@ -15,9 +15,13 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..error_translation import ErrorConfig, translate_sdk_error
+from ..security_redaction import safe_log_message
+
+if TYPE_CHECKING:
+    from .types import SessionHandle
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +118,9 @@ def _load_error_config_once() -> ErrorConfig:
     try:
         return load_error_config()  # None = use importlib.resources or fallback
     except Exception as e:
-        logger.warning("Failed to load error config: %s", e)
+        from ..security_redaction import redact_sensitive_text
+
+        logger.warning("Failed to load error config: %s", redact_sensitive_text(e))
         return ErrorConfig()
 
 
@@ -221,13 +227,22 @@ class CopilotClientWrapper:
                 if SubprocessConfig is not None and token:
                     config = SubprocessConfig(github_token=token)
                     self._owned_client = CopilotClient(config)  # type: ignore[arg-type]
+                elif token and SubprocessConfig is None:
+                    # Security P1-6: Fail closed when explicit token cannot be applied.
+                    # An explicitly-provided token MUST NEVER be silently ignored.
+                    # This prevents unintended privilege escalation from falling back
+                    # to ambient/default authentication with potentially broader permissions.
+                    # OWASP A07: Identification and Authentication Failures
+                    from ..error_translation import ConfigurationError
+
+                    raise ConfigurationError(
+                        "Explicit GitHub token provided via environment variable, but SDK's "
+                        "SubprocessConfig is unavailable (SDK version mismatch). Cannot apply "
+                        "token - failing closed to prevent unintended default authentication.",
+                        provider="github-copilot",
+                    )
                 else:
-                    # Fallback: token may be dropped if SubprocessConfig unavailable
-                    if token and SubprocessConfig is None:
-                        logger.warning(
-                            "[CLIENT] SubprocessConfig unavailable (SDK version mismatch?), "
-                            "token will be ignored. SDK will attempt default auth."
-                        )
+                    # No token provided - use SDK default authentication
                     self._owned_client = CopilotClient()  # type: ignore[arg-type]
 
                 logger.debug("[CLIENT] CopilotClient created for %s", caller)
@@ -244,9 +259,10 @@ class CopilotClientWrapper:
 
             except ImportError as e:
                 from ..error_translation import ProviderUnavailableError
+                from ..security_redaction import redact_sensitive_text
 
                 raise ProviderUnavailableError(
-                    f"Copilot SDK not installed: {e}",
+                    f"Copilot SDK not installed: {redact_sensitive_text(e)}",
                     provider="github-copilot",
                 ) from e
             except Exception as e:
@@ -260,8 +276,11 @@ class CopilotClientWrapper:
         *,
         system_message: str | None = None,
         tools: list[Any] | None = None,
-    ) -> AsyncIterator[Any]:
+    ) -> AsyncIterator[SessionHandle]:
         """Create an ephemeral session with proper cleanup.
+
+        P2-11: Returns SessionHandle façade instead of raw SDK session.
+        Contract: sdk-boundary:TypeTranslation:MUST:4 — Use opaque handles
 
         Sessions are always destroyed on exit (success or error).
         Streaming is always enabled (required for event-based tool capture).
@@ -286,7 +305,7 @@ class CopilotClientWrapper:
 
         session_config: dict[str, Any] = {}
         # Contract: deny-destroy:ToolSuppression:MUST:1
-        # WHITELIST APPROACH: Set available_tools to Amplifier tool names only.
+        # ALLOWLIST APPROACH: Set available_tools to Amplifier tool names only.
         # This blocks ALL SDK built-ins (list_agents, bash, edit, etc.) proactively.
         # The model never sees them, so it can't call them.
         #
@@ -305,17 +324,24 @@ class CopilotClientWrapper:
             sdk_tools = convert_tools_for_sdk(tools)
             session_config["tools"] = sdk_tools
 
-            # WHITELIST: Only Amplifier tools visible to model
+            # ALLOWLIST: Only Amplifier tools visible to model
             # SDK built-ins (list_agents, bash, edit, etc.) are blocked because
-            # they're not in the whitelist. This is Layer 1 of defense-in-depth.
+            # they're not in the allowlist. This is Layer 1 of defense-in-depth.
             tool_names = [t.name for t in sdk_tools]
             session_config["available_tools"] = tool_names
 
             logger.debug("[CLIENT] Forwarding %d tool(s) to SDK session", len(tools))
-            logger.debug("[CLIENT] available_tools WHITELIST set: %s", tool_names)
+            logger.debug("[CLIENT] available_tools ALLOWLIST set: %s", tool_names)
             logger.debug(
-                "[CLIENT] SDK built-ins (list_agents, bash, edit, etc.) blocked by whitelist"
+                "[CLIENT] SDK built-ins (list_agents, bash, edit, etc.) blocked by allowlist"
             )
+        else:
+            # Contract: deny-destroy:ToolSuppression:MUST:1 — MUST NOT omit available_tools
+            # When no Amplifier tools are provided, set available_tools=[] to prevent
+            # SDK built-ins (list_agents, bash, edit) from appearing to the model.
+            # This is safe because there are no Amplifier tools to accidentally disable.
+            session_config["available_tools"] = []
+            logger.debug("[CLIENT] No tools provided, available_tools=[] blocks SDK built-ins")
         # Streaming MUST always be enabled for event-based tool capture
         session_config["streaming"] = True
         # SDK v0.2.0: on_permission_request passed to create_session (not client constructor)
@@ -339,7 +365,12 @@ class CopilotClientWrapper:
             raise translate_sdk_error(e, error_config) from e
 
         try:
-            yield sdk_session
+            # P2-11: Return SessionHandle façade instead of raw SDK session
+            # Contract: sdk-boundary:TypeTranslation:MUST:4 — Use opaque handles
+            from .types import SessionHandle
+
+            session_id = str(getattr(sdk_session, "session_id", "unknown"))
+            yield SessionHandle(sdk_session, session_id)
         finally:
             if sdk_session is not None:
                 try:
@@ -349,7 +380,8 @@ class CopilotClientWrapper:
                 except Exception as disconnect_err:
                     # Track disconnect failures and escalate after threshold
                     self._disconnect_failures += 1
-                    logger.warning("[CLIENT] Error disconnecting session: %s", disconnect_err)
+                    msg = "[CLIENT] Error disconnecting session: %s"
+                    logger.warning(*safe_log_message(msg, disconnect_err))
                     if self._disconnect_failures > 3:
                         logger.error(
                             "[CLIENT] Multiple disconnect failures (%d) — potential resource leak",
@@ -365,7 +397,7 @@ class CopilotClientWrapper:
                 await self._owned_client.stop()
                 logger.info("[CLIENT] Copilot client stopped")
             except Exception as e:
-                logger.warning("[CLIENT] Error stopping client: %s", e)
+                logger.warning(*safe_log_message("[CLIENT] Error stopping client: %s", e))
             finally:
                 self._owned_client = None
 

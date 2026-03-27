@@ -7,6 +7,9 @@ Tests verify:
 - Next session attempt re-initializes the client
 - Original exception is still propagated
 - Retry after failure succeeds
+
+Note: These tests mock SubprocessConfig as non-None to avoid triggering
+the P1-6 security fix (fail-closed when token cannot be applied).
 """
 
 from __future__ import annotations
@@ -15,6 +18,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+# Mock SubprocessConfig that accepts github_token
+class MockSubprocessConfig:
+    """Mock SubprocessConfig that accepts github_token."""
+
+    def __init__(self, github_token: str | None = None) -> None:
+        self.github_token = github_token
 
 
 class TestFailedStartCleanup:
@@ -40,10 +51,16 @@ class TestFailedStartCleanup:
         mock_client_class.return_value = mock_client_instance
 
         with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
-            # Patch where CopilotClient is used (the _imports module where it's imported)
-            with patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                mock_client_class,
+            # Patch where CopilotClient and SubprocessConfig are used
+            with (
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                    mock_client_class,
+                ),
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                    MockSubprocessConfig,
+                ),
             ):
                 # First attempt should raise
                 with pytest.raises(Exception) as exc_info:
@@ -93,10 +110,16 @@ class TestFailedStartCleanup:
         mock_client_class = MagicMock(side_effect=create_client)
 
         with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
-            # Patch where CopilotClient is used (the _imports module where it's imported)
-            with patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                mock_client_class,
+            # Patch where CopilotClient and SubprocessConfig are used
+            with (
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                    mock_client_class,
+                ),
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                    MockSubprocessConfig,
+                ),
             ):
                 # First attempt: should fail
                 # RuntimeError from start() is translated to ProviderUnavailableError
@@ -134,10 +157,16 @@ class TestFailedStartCleanup:
         mock_client_class.return_value = mock_client_instance
 
         with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
-            # Patch where CopilotClient is used (the _imports module where it's imported)
-            with patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                mock_client_class,
+            # Patch where CopilotClient and SubprocessConfig are used
+            with (
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                    mock_client_class,
+                ),
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                    MockSubprocessConfig,
+                ),
             ):
                 with pytest.raises(Exception) as exc_info:
                     async with wrapper.session(model="gpt-4"):
@@ -172,10 +201,16 @@ class TestFailedStartCleanup:
         mock_client_class.return_value = mock_client_instance
 
         with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
-            # Patch where CopilotClient is used (the _imports module where it's imported)
-            with patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                mock_client_class,
+            # Patch where CopilotClient and SubprocessConfig are used
+            with (
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                    mock_client_class,
+                ),
+                patch(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                    MockSubprocessConfig,
+                ),
             ):
                 async with wrapper.session(model="gpt-4"):
                     pass

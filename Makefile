@@ -18,7 +18,8 @@
 .PHONY: install test smoke coverage lint format check clean help sdk-assumptions
 
 # Default Python - override with: make test PYTHON=python3.12
-PYTHON ?= python
+# Use python3 for Linux/macOS compatibility (Debian/Ubuntu lack 'python' symlink)
+PYTHON ?= python3
 
 # Package name for coverage
 PACKAGE = amplifier_module_provider_github_copilot

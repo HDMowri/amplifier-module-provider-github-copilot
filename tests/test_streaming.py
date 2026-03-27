@@ -990,3 +990,62 @@ class TestProgressiveStreamingEmission:
             assert len(provider._pending_emit_tasks) == 1  # pyright: ignore[reportPrivateUsage]
 
         asyncio.run(run_test())
+
+
+# ============================================================================
+# Fail-Fast Guard Tests (P2-10)
+# Contract: streaming-contract:SessionLifecycle:MUST:1
+# ============================================================================
+
+
+class TestConfigurationFailFast:
+    """Test fail-fast behavior for missing critical config.
+
+    P2-10: Add missing module tests.
+    Contract: streaming-contract:SessionLifecycle:MUST:1
+    """
+
+    def test_config_has_required_idle_events(self) -> None:
+        """Config MUST have idle_events for session completion detection.
+
+        Contract: streaming-contract:SessionLifecycle:MUST:1
+        If idle_events is empty, provider cannot detect session completion.
+        """
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        config = load_event_config()
+
+        # idle_events MUST be populated
+        assert config.idle_event_types, (
+            "idle_events must be populated for session completion detection"
+        )
+        # Should contain expected idle event types
+        assert any("idle" in t.lower() for t in config.idle_event_types), (
+            "idle_events should contain an idle-like event type"
+        )
+
+    def test_config_has_required_error_events(self) -> None:
+        """Config MUST have error_events for error detection.
+
+        Contract: streaming-contract:SessionLifecycle:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        config = load_event_config()
+
+        # error_events MUST be populated
+        assert config.error_event_types, "error_events must be populated for error detection"
+
+    def test_valid_config_loads_successfully(self) -> None:
+        """Valid config loads without error.
+
+        Baseline test to ensure fail-fast doesn't break normal operation.
+        """
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        # Should not raise
+        config = load_event_config()
+
+        # Config should have required fields populated
+        assert config.idle_event_types, "idle_events should be populated"
+        assert config.bridge_mappings is not None, "bridge_mappings should exist"

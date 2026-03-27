@@ -176,7 +176,9 @@ def write_cache(
         temp_file.replace(cache_file)
         logger.debug("Cached %d models to %s", len(models), cache_file)
     except Exception as e:
-        logger.warning("Failed to write cache: %s", e)
+        from .security_redaction import redact_sensitive_text
+
+        logger.warning("Failed to write cache: %s", redact_sensitive_text(e))
         # Clean up temp file if it exists
         if temp_file.exists():
             try:
@@ -222,7 +224,9 @@ def read_cache(
         content = cache_file.read_text(encoding="utf-8")
         data = json.loads(content)
     except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read cache: %s", e)
+        from .security_redaction import redact_sensitive_text
+
+        logger.warning("Failed to read cache: %s", redact_sensitive_text(e))
         return None
 
     # Check timestamp / TTL
@@ -254,7 +258,9 @@ def read_cache(
         logger.debug("Read %d models from cache", len(models))
         return models
     except (KeyError, TypeError) as e:
-        logger.warning("Invalid cache data: %s", e)
+        from .security_redaction import redact_sensitive_text
+
+        logger.warning("Invalid cache data: %s", redact_sensitive_text(e))
         return None
 
 
@@ -277,4 +283,6 @@ def invalidate_cache(cache_file: Path | None = None) -> None:
             cache_file.unlink()
             logger.debug("Cache invalidated: %s", cache_file)
         except Exception as e:
-            logger.warning("Failed to invalidate cache: %s", e)
+            from .security_redaction import redact_sensitive_text
+
+            logger.warning("Failed to invalidate cache: %s", redact_sensitive_text(e))

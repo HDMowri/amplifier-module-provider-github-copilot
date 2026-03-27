@@ -166,7 +166,12 @@ def load_observability_config() -> ObservabilityConfig:
         )
 
     except Exception as e:
-        logger.warning("[OBSERVABILITY] Failed to load config: %s. Using defaults.", e)
+        from .security_redaction import redact_sensitive_text
+
+        logger.warning(
+            "[OBSERVABILITY] Failed to load config: %s. Using defaults.",
+            redact_sensitive_text(e),
+        )
         return _default_observability_config()
 
 
@@ -193,7 +198,13 @@ async def emit_event(
         try:
             await coordinator.hooks.emit(event_name, data)
         except Exception as e:
-            logger.warning("[OBSERVABILITY] Failed to emit '%s': %s", event_name, e)
+            from .security_redaction import redact_sensitive_text
+
+            logger.warning(
+                "[OBSERVABILITY] Failed to emit '%s': %s",
+                event_name,
+                redact_sensitive_text(e),
+            )
 
 
 # ============================================================================
@@ -218,22 +229,40 @@ class LlmLifecycleContext:
         tool_count: int,
         streaming: bool,
         timeout: float,
+        raw_request: dict[str, Any] | None = None,
     ) -> None:
         """Emit llm:request event.
 
         Contract: observability:Events:MUST:2
+        Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
+
+        Args:
+            message_count: Number of messages in request.
+            tool_count: Number of tools available.
+            streaming: Whether streaming is enabled.
+            timeout: Request timeout in seconds.
+            raw_request: Optional raw request payload (only included if raw_payloads=True).
         """
+        payload: dict[str, Any] = {
+            "provider": self.provider_name,
+            "model": self.model,
+            "message_count": message_count,
+            "tool_count": tool_count,
+            "streaming": streaming,
+            "timeout": timeout,
+        }
+
+        # P3-14: Enforce raw_payloads policy
+        if self.config.raw_payloads and raw_request:
+            from .security_redaction import redact_sensitive_text
+
+            # Redact before including (contract: Verbosity:MUST:2)
+            payload["raw_request"] = redact_sensitive_text(str(raw_request))
+
         await emit_event(
             self.coordinator,
             self.config.event_names.llm_request,
-            {
-                "provider": self.provider_name,
-                "model": self.model,
-                "message_count": message_count,
-                "tool_count": tool_count,
-                "streaming": streaming,
-                "timeout": timeout,
-            },
+            payload,
         )
 
     async def emit_response_ok(
@@ -244,10 +273,12 @@ class LlmLifecycleContext:
         finish_reason: str | None,
         content_blocks: int,
         tool_calls: int,
+        raw_response: dict[str, Any] | None = None,
     ) -> None:
         """Emit llm:response event for successful completion.
 
         Contract: observability:Events:MUST:3
+        Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
         """
         elapsed_ms = int((time.time() - self.start_time) * 1000)
 
@@ -259,22 +290,31 @@ class LlmLifecycleContext:
                 else self.config.finish_reasons.end_turn
             )
 
+        payload: dict[str, Any] = {
+            "provider": self.provider_name,
+            "model": self.model,
+            "status": self.config.status.ok,
+            "duration_ms": elapsed_ms,
+            "usage": {
+                "input": usage_input,
+                "output": usage_output,
+            },
+            "finish_reason": finish_reason,
+            "content_blocks": content_blocks,
+            "tool_calls": tool_calls,
+        }
+
+        # P3-14: Enforce raw_payloads policy
+        if self.config.raw_payloads and raw_response:
+            from .security_redaction import redact_sensitive_text
+
+            # Redact before including (contract: Verbosity:MUST:2)
+            payload["raw_response"] = redact_sensitive_text(str(raw_response))
+
         await emit_event(
             self.coordinator,
             self.config.event_names.llm_response,
-            {
-                "provider": self.provider_name,
-                "model": self.model,
-                "status": self.config.status.ok,
-                "duration_ms": elapsed_ms,
-                "usage": {
-                    "input": usage_input,
-                    "output": usage_output,
-                },
-                "finish_reason": finish_reason,
-                "content_blocks": content_blocks,
-                "tool_calls": tool_calls,
-            },
+            payload,
         )
 
     async def emit_response_error(
@@ -286,8 +326,12 @@ class LlmLifecycleContext:
         """Emit llm:response event for error.
 
         Contract: observability:Events:MUST:3
+        Contract: behaviors:Logging:MUST:4 - Sanitize error messages
         """
+        from .security_redaction import redact_sensitive_text
+
         elapsed_ms = int((time.time() - self.start_time) * 1000)
+        sanitized_message = redact_sensitive_text(error_message)
 
         await emit_event(
             self.coordinator,
@@ -298,7 +342,7 @@ class LlmLifecycleContext:
                 "status": self.config.status.error,
                 "duration_ms": elapsed_ms,
                 "error_type": error_type,
-                "error_message": error_message,
+                "error_message": sanitized_message,
             },
         )
 
@@ -314,7 +358,12 @@ class LlmLifecycleContext:
         """Emit provider:retry event.
 
         Contract: provider-protocol:hooks:provider_retry:MUST:1
+        Contract: behaviors:Logging:MUST:4 - Sanitize error messages
         """
+        from .security_redaction import redact_sensitive_text
+
+        sanitized_message = redact_sensitive_text(error_message)
+
         await emit_event(
             self.coordinator,
             self.config.event_names.provider_retry,
@@ -325,7 +374,7 @@ class LlmLifecycleContext:
                 "max_retries": max_retries,
                 "delay": delay,
                 "error_type": error_type,
-                "error_message": error_message,
+                "error_message": sanitized_message,
             },
         )
 

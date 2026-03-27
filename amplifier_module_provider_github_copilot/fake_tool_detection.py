@@ -123,7 +123,13 @@ def _load_fake_tool_detection_config_cached(
             try:
                 compiled_patterns.append(re.compile(pattern_str, re.IGNORECASE))
             except re.error as e:
-                logger.warning("Invalid regex pattern '%s': %s", pattern_str, e)
+                from .security_redaction import redact_sensitive_text
+
+                logger.warning(
+                    "Invalid regex pattern '%s': %s",
+                    pattern_str,
+                    redact_sensitive_text(e),
+                )
 
         if not compiled_patterns:
             compiled_patterns = _default_patterns()
@@ -152,7 +158,9 @@ def _load_fake_tool_detection_config_cached(
             logging=logging_config,
         )
     except yaml.YAMLError as e:
-        logger.warning("Error parsing fake tool detection config: %s", e)
+        from .security_redaction import redact_sensitive_text
+
+        logger.warning("Error parsing fake tool detection config: %s", redact_sensitive_text(e))
         return FakeToolDetectionConfig(patterns=_default_patterns())
 
 

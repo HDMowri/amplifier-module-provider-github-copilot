@@ -164,8 +164,11 @@ async def fetch_models(client: Any) -> list[CopilotModelInfo]:
     except Exception as exc:
         # Contract: behaviors:ModelDiscoveryError:MUST:2
         # Error message MUST include reason for failure
+        # Contract: behaviors:Logging:MUST:4 - Redact sensitive text
+        from .security_redaction import redact_sensitive_text
+
         raise ProviderUnavailableError(
-            f"Failed to fetch models from SDK: {exc}. "
+            f"Failed to fetch models from SDK: {redact_sensitive_text(exc)}. "
             "SDK connection unavailable, no cached models available.",
             provider="github-copilot",
         ) from exc

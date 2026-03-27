@@ -237,12 +237,12 @@ class TestSessionConfigInvariants:
     """
 
     @pytest.mark.asyncio
-    async def test_session_config_available_tools_not_set(self) -> None:
-        """available_tools must NOT be set to avoid SDK whitelist behavior.
+    async def test_session_config_available_tools_set_empty_without_tools(self) -> None:
+        """available_tools MUST be set to [] when no tools provided.
 
-        SDK treats available_tools=[] as "no tools allowed" (empty whitelist).
-        By NOT setting available_tools, we let user tools with overrides_built_in_tool=True
-        take precedence over SDK built-ins.
+        Contract v1.2 correction: available_tools MUST NOT be omitted.
+        When no Amplifier tools are provided, available_tools=[] prevents
+        SDK built-in tools (list_agents, bash, edit) from appearing.
 
         Contract: deny-destroy:ToolSuppression:MUST:1
         """
@@ -256,9 +256,10 @@ class TestSessionConfigInvariants:
         async with wrapper.session(model="gpt-4"):
             pass
 
-        # available_tools should NOT be in config (Bug #1 fix)
-        # Setting it to [] was disabling all tools via SDK whitelist
-        assert "available_tools" not in mock_client.last_config
+        # available_tools MUST be set (not omitted) - contract v1.2 fix
+        # When no tools provided, empty list blocks SDK built-ins
+        assert "available_tools" in mock_client.last_config
+        assert mock_client.last_config["available_tools"] == []
 
     @pytest.mark.asyncio
     async def test_session_config_streaming_always_true(self) -> None:
@@ -702,36 +703,43 @@ class TestDenyHookBehavior:
         assert result.get("suppressOutput") is True
 
 
-class TestTokenFallbackWarning:
-    """Test warning when token exists but SubprocessConfig unavailable.
+class TestTokenFallbackSecurity:
+    """Test security behavior when token exists but SubprocessConfig unavailable.
 
-    This prevents silent token drops when SDK version mismatch causes
-    SubprocessConfig to be None.
+    P1-6 Security Fix: An explicit token MUST NEVER be silently ignored.
+
+    Contract (OWASP A07): When explicit token is provided but SDK can't apply it:
+    - ALWAYS fail closed with ConfigurationError
+    - No escape hatches - security behavior is unconditional
+    - If tests need to avoid this: clear token env vars, don't mock SubprocessConfig=None
+
+    The SKIP_SDK_CHECK env var controls SDK _imports_ only, NOT auth behavior.
     """
 
     @pytest.mark.asyncio
-    async def test_logs_warning_when_token_dropped(
+    async def test_raises_error_when_token_dropped_in_production(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Logs warning when SubprocessConfig is None but token exists.
+        """Raises ConfigurationError when SubprocessConfig unavailable with token.
 
         Contract: sdk-boundary:Config:MUST:1
-        Bug fix: Token silently dropped when SubprocessConfig unavailable.
+        Security: Fail closed to prevent unintended default authentication.
         """
-        import logging
+        import pytest
 
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
 
+        # Clear SKIP_SDK_CHECK to simulate production mode
+        monkeypatch.delenv("SKIP_SDK_CHECK", raising=False)
+
         # Set a token
         monkeypatch.setenv("GITHUB_TOKEN", "test-token-value")
 
-        # Mock SDK imports with SubprocessConfig = None (simulates SDK version mismatch)
         mock_session = AsyncMock()
-        mock_session.session_id = "fallback-test"
+        mock_session.session_id = "fail-closed-test"
         mock_session.disconnect = AsyncMock()
 
         class MockCopilotClient:
@@ -757,34 +765,95 @@ class TestTokenFallbackWarning:
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
                 None,
             ),
-            caplog.at_level(logging.WARNING),
         ):
             wrapper = CopilotClientWrapper()
-            async with wrapper.session(model="gpt-4"):
-                pass
+            with pytest.raises(Exception) as exc_info:
+                async with wrapper.session(model="gpt-4"):
+                    pass
 
-        # Verify warning was logged
-        assert any(
-            "SubprocessConfig unavailable" in record.message
-            and "token will be ignored" in record.message
-            for record in caplog.records
-        ), f"Expected warning about token being ignored, got: {[r.message for r in caplog.records]}"
+            # Should be a ConfigurationError about failing closed
+            assert "SubprocessConfig" in str(exc_info.value)
+            assert (
+                "failing closed" in str(exc_info.value).lower()
+                or "cannot apply" in str(exc_info.value).lower()
+            )
 
     @pytest.mark.asyncio
-    async def test_no_warning_when_token_none(
+    async def test_token_always_fails_closed_no_escape_hatch(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """No warning when no token exists (normal fallback path).
+        """Explicit token ALWAYS fails closed when SubprocessConfig unavailable.
 
-        Contract: sdk-boundary:Config:MUST:1
+        P1-6 Security Fix: SKIP_SDK_CHECK escape hatch removed.
+        An explicit token MUST NEVER be silently ignored - this prevents
+        unintended privilege escalation from ambient auth fallback.
+
+        Contract: OWASP A07 Identification and Authentication Failures
         """
-        import logging
+        import pytest
 
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
+
+        # Even with SKIP_SDK_CHECK set (test mode), token MUST fail closed
+        monkeypatch.setenv("SKIP_SDK_CHECK", "1")
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token-value")
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "security-test"
+        mock_session.disconnect = AsyncMock()
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                pass
+
+            async def start(self) -> None:
+                pass
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                return mock_session
+
+            async def stop(self) -> None:
+                pass
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                None,
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
+            # MUST raise - P1-6: token failure is never silent
+            with pytest.raises(Exception) as exc_info:
+                async with wrapper.session(model="gpt-4"):
+                    pass
+
+            assert (
+                "SubprocessConfig" in str(exc_info.value)
+                or "failing closed" in str(exc_info.value).lower()
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_error_when_no_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No error when no token exists (normal fallback path).
+
+        Contract: sdk-boundary:Config:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        # Clear SKIP_SDK_CHECK to simulate production mode
+        monkeypatch.delenv("SKIP_SDK_CHECK", raising=False)
 
         # Clear all token env vars
         for var in ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
@@ -816,13 +885,8 @@ class TestTokenFallbackWarning:
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
                 None,
             ),
-            caplog.at_level(logging.WARNING),
         ):
             wrapper = CopilotClientWrapper()
+            # Should NOT raise - no token means no security concern
             async with wrapper.session(model="gpt-4"):
                 pass
-
-        # No warning should be logged when token is None
-        assert not any("token will be ignored" in record.message for record in caplog.records), (
-            f"Unexpected warning: {[r.message for r in caplog.records]}"
-        )

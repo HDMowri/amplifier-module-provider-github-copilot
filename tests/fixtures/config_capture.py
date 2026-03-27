@@ -27,7 +27,7 @@ class ConfigCapturingMock:
             pass
 
         config = mock_client.captured_configs[0]
-        assert "available_tools" not in config  # Bug #1 fix
+        assert config["available_tools"] == []  # Contract v1.2: always set
     """
 
     def __init__(self) -> None:

@@ -159,16 +159,23 @@ class TestListModels:
             assert isinstance(model, ModelInfo)
 
     @pytest.mark.asyncio
-    async def test_list_models_includes_gpt4_and_gpt4o(self) -> None:
-        """AC-3: list_models() includes both GPT-4 and GPT-4o models."""
+    async def test_list_models_has_minimum_models(self) -> None:
+        """AC-3: list_models() returns at least one model.
+
+        P3-13: Replaced brittle assertion for specific model IDs.
+        Model inventory may change; we verify structure, not specific names.
+        """
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
 
         provider = GitHubCopilotProvider()
         models = await provider.list_models()
 
-        model_ids = [m.id for m in models]
-        assert "gpt-4" in model_ids, "gpt-4 model missing"
-        assert "gpt-4o" in model_ids, "gpt-4o model missing"
+        # Structural check: at least one model exists
+        assert len(models) >= 1, "Must have at least one model"
+        # Each model has required fields
+        for model in models:
+            assert model.id, "Model must have non-empty id"
+            assert model.display_name or model.id, "Model must have display name or id"
 
     @pytest.mark.asyncio
     async def test_list_models_has_required_fields(self) -> None:

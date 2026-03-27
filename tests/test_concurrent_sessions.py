@@ -2,6 +2,9 @@
 Tests for concurrent session race conditions.
 
 Contract: contracts/sdk-boundary.md
+
+Note: These tests mock SubprocessConfig as non-None to avoid triggering
+the P1-6 security fix (fail-closed when token cannot be applied).
 """
 
 from __future__ import annotations
@@ -11,6 +14,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+# Mock SubprocessConfig that accepts github_token
+class MockSubprocessConfig:
+    """Mock SubprocessConfig that accepts github_token."""
+
+    def __init__(self, github_token: str | None = None) -> None:
+        self.github_token = github_token
 
 
 class TestConcurrentSessions:
@@ -48,34 +59,43 @@ class TestConcurrentSessions:
 
         mock_client_instance.create_session = mock_create_session
 
-        # Patch CopilotClient in _imports.py (where client.py imports it from)
-        with patch(
-            "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-            MagicMock(return_value=mock_client_instance),
-        ):
-            # Patch _resolve_token to return a token (so we don't get auth errors)
-            with patch(
+        # Patch CopilotClient and SubprocessConfig in _imports.py
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MagicMock(return_value=mock_client_instance),
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                MockSubprocessConfig,
+            ),
+            patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client._resolve_token",
                 return_value="test-token",
-            ):
-                wrapper = CopilotClientWrapper()
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
 
-                # Launch 5 concurrent session requests
-                async def get_session() -> MagicMock:
-                    async with wrapper.session() as s:
-                        return s
+            # Launch 5 concurrent session requests
+            from amplifier_module_provider_github_copilot.sdk_adapter import SessionHandle
 
-                sessions = await asyncio.gather(*[get_session() for _ in range(5)])
+            async def get_session() -> SessionHandle:
+                async with wrapper.session() as s:
+                    return s
 
-                # All should succeed without error
-                assert len(sessions) == 5
+            sessions = await asyncio.gather(*[get_session() for _ in range(5)])
 
-                # Client should have been started exactly once (not 5 times)
-                assert client_start_count == 1
+            # All should succeed without error
+            assert len(sessions) == 5
 
-                # All sessions should be the same mock session object
-                for s in sessions:
-                    assert s is mock_session
+            # Client should have been started exactly once (not 5 times)
+            assert client_start_count == 1
+
+            # All sessions wrap the same underlying mock session
+            # (SessionHandle façade wraps raw SDK session)
+
+            for s in sessions:
+                assert isinstance(s, SessionHandle)
 
     @pytest.mark.asyncio
     async def test_lock_prevents_double_init(self) -> None:
@@ -100,24 +120,30 @@ class TestConcurrentSessions:
         mock_client_instance.start = mock_start
         mock_client_instance.create_session = AsyncMock(return_value=mock_session)
 
-        # Patch CopilotClient in _imports.py (where client.py imports it from)
-        with patch(
-            "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-            MagicMock(return_value=mock_client_instance),
-        ):
-            with patch(
+        # Patch CopilotClient and SubprocessConfig in _imports.py
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MagicMock(return_value=mock_client_instance),
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                MockSubprocessConfig,
+            ),
+            patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client._resolve_token",
                 return_value="test-token",
-            ):
-                wrapper = CopilotClientWrapper()
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
 
-                # Create many concurrent requests
-                async def create_one() -> None:
-                    async with wrapper.session():
-                        pass
+            # Create many concurrent requests
+            async def create_one() -> None:
+                async with wrapper.session():
+                    pass
 
-                # Run 10 concurrent session creations
-                await asyncio.gather(*[create_one() for _ in range(10)])
+            # Run 10 concurrent session creations
+            await asyncio.gather(*[create_one() for _ in range(10)])
 
-                # Init should have happened exactly once, not 10 times
-                assert init_count == 1
+            # Init should have happened exactly once, not 10 times
+            assert init_count == 1

@@ -30,6 +30,18 @@ if sys.platform == "win32":
 # Allow test imports without SDK installed - tests use skip markers for SDK tests
 os.environ["SKIP_SDK_CHECK"] = "1"
 
+# P1-6 Security Fix: Clear GitHub token env vars for non-live tests.
+# This prevents the fail-closed security behavior from triggering when
+# SubprocessConfig is None (due to SKIP_SDK_CHECK=1) and a token exists.
+# Live tests (marked with @pytest.mark.live) should preserve their tokens.
+_TOKEN_ENV_VARS = ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+_saved_tokens: dict[str, str] = {}
+for _var in _TOKEN_ENV_VARS:
+    _val = os.environ.get(_var)
+    if _val:
+        _saved_tokens[_var] = _val
+        del os.environ[_var]
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -205,6 +217,48 @@ def sdk_module() -> Any:
     Use this for Tier 6 tests that need SDK types but not a running client.
     """
     return pytest.importorskip("copilot", reason="github-copilot-sdk not installed")
+
+
+from collections.abc import Generator
+
+
+@pytest.fixture
+def restore_github_tokens() -> Generator[None, None, None]:
+    """Restore saved GitHub tokens for live tests.
+
+    Use this fixture in @pytest.mark.live tests that need real tokens.
+    Tokens were saved and cleared at module load for security (P1-6).
+    """
+    for var, val in _saved_tokens.items():
+        os.environ[var] = val
+    yield
+    # Restore cleared state after test
+    for var in _saved_tokens:
+        if var in os.environ:
+            del os.environ[var]
+
+
+@pytest.fixture(autouse=True)
+def _auto_restore_tokens_for_live_tests(  # pyright: ignore[reportUnusedFunction]
+    request: pytest.FixtureRequest,
+) -> Generator[None, None, None]:
+    """Automatically restore tokens for @pytest.mark.live tests.
+
+    P1-6 Security Fix: GitHub tokens are cleared at conftest import to prevent
+    unit tests from accidentally using real credentials when SubprocessConfig=None.
+    Live tests that need real credentials get tokens restored automatically.
+    """
+    # Check if test is marked as "live"
+    if request.node.get_closest_marker("live"):  # pyright: ignore[reportUnknownMemberType]
+        for var, val in _saved_tokens.items():
+            os.environ[var] = val
+        yield
+        # Clear after test
+        for var in _saved_tokens:
+            if var in os.environ:
+                del os.environ[var]
+    else:
+        yield
 
 
 @pytest.fixture

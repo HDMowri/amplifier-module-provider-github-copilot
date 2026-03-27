@@ -7,6 +7,9 @@ Tests for:
 - mount() exception → returns None path
 - MagicMock with spec= for type safety
 - Concurrent session deny hook verification
+
+Note: These tests mock SubprocessConfig as non-None to avoid triggering
+the P1-6 security fix (fail-closed when token cannot be applied).
 """
 
 from __future__ import annotations
@@ -17,6 +20,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+# Mock SubprocessConfig that accepts github_token
+class MockSubprocessConfig:
+    """Mock SubprocessConfig that accepts github_token."""
+
+    def __init__(self, github_token: str | None = None) -> None:
+        self.github_token = github_token
 
 
 class TestMountFailurePath:
@@ -159,35 +170,44 @@ class TestConcurrentSessionDenyHook:
 
         mock_client_instance.create_session = mock_create_session
 
-        with patch(
-            "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-            MagicMock(return_value=mock_client_instance),
-        ):
-            with patch(
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MagicMock(return_value=mock_client_instance),
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                MockSubprocessConfig,
+            ),
+            patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client._resolve_token",
                 return_value="test-token",
-            ):
-                wrapper = CopilotClientWrapper()
+            ),
+        ):
+            from amplifier_module_provider_github_copilot.sdk_adapter import SessionHandle
 
-                # Launch 3 concurrent session requests
-                async def get_session() -> MagicMock:
-                    async with wrapper.session() as s:
-                        return s
+            wrapper = CopilotClientWrapper()
 
-                await asyncio.gather(*[get_session() for _ in range(3)])
+            # Launch 3 concurrent session requests
+            async def get_session() -> SessionHandle:
+                async with wrapper.session() as s:
+                    return s
 
-                # All 3 sessions should have deny hook in config
-                assert len(session_configs) == 3
-                for config in session_configs:
-                    # Verify hooks dict exists with on_pre_tool_use
-                    assert "hooks" in config, "Session config missing hooks"
-                    assert "on_pre_tool_use" in config["hooks"], "Missing deny hook"
-                    # Verify the hook is actually callable
-                    assert callable(config["hooks"]["on_pre_tool_use"])
+            await asyncio.gather(*[get_session() for _ in range(3)])
 
-                    # Bug #1 fix: available_tools must NOT be set
-                    # Setting to [] was disabling all tools via SDK whitelist behavior
-                    assert "available_tools" not in config, "available_tools must NOT be set"
+            # All 3 sessions should have deny hook in config
+            assert len(session_configs) == 3
+            for config in session_configs:
+                # Verify hooks dict exists with on_pre_tool_use
+                assert "hooks" in config, "Session config missing hooks"
+                assert "on_pre_tool_use" in config["hooks"], "Missing deny hook"
+                # Verify the hook is actually callable
+                assert callable(config["hooks"]["on_pre_tool_use"])
+
+                # Contract v1.2: available_tools MUST be set (not omitted)
+                # When no tools provided, available_tools=[] blocks SDK built-ins
+                assert "available_tools" in config, "available_tools must be set"
+                assert config["available_tools"] == [], "available_tools must be []"
 
     @pytest.mark.asyncio
     async def test_deny_hook_returns_deny_result(self) -> None:
@@ -216,32 +236,38 @@ class TestConcurrentSessionDenyHook:
 
         mock_client_instance.create_session = mock_create_session
 
-        with patch(
-            "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-            MagicMock(return_value=mock_client_instance),
-        ):
-            with patch(
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MagicMock(return_value=mock_client_instance),
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                MockSubprocessConfig,
+            ),
+            patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client._resolve_token",
                 return_value="test-token",
-            ):
-                wrapper = CopilotClientWrapper()
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
 
-                async with wrapper.session():
-                    pass  # Just need to create session to capture hook
+            async with wrapper.session():
+                pass  # Just need to create session to capture hook
 
-                # Call the captured hook and verify it returns denial
-                assert captured_hook is not None, "Hook was not captured"
+            # Call the captured hook and verify it returns denial
+            assert captured_hook is not None, "Hook was not captured"
 
-                # Call the hook with mock tool use request
-                # SDK hooks take (input_data, context) as per _make_deny_hook_config
-                mock_input_data = {"toolName": "read_file", "arguments": {"path": "/etc/passwd"}}
-                mock_context = MagicMock()
+            # Call the hook with mock tool use request
+            # SDK hooks take (input_data, context) as per _make_deny_hook_config
+            mock_input_data = {"toolName": "read_file", "arguments": {"path": "/etc/passwd"}}
+            mock_context = MagicMock()
 
-                result = captured_hook(mock_input_data, mock_context)
+            result = captured_hook(mock_input_data, mock_context)
 
-                # The deny hook should return something indicating denial
-                # (The exact shape depends on SDK version, but should not be None/empty)
-                assert result is not None, "Deny hook must return a result"
+            # The deny hook should return something indicating denial
+            # (The exact shape depends on SDK version, but should not be None/empty)
+            assert result is not None, "Deny hook must return a result"
 
 
 class TestF069DeadCodeRemoval:

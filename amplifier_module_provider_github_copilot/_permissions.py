@@ -19,6 +19,8 @@ import logging
 import stat
 from pathlib import Path
 
+from .security_redaction import safe_log_message
+
 logger = logging.getLogger(__name__)
 
 # Permission bits for user and group execute
@@ -69,8 +71,8 @@ def ensure_executable(path: Path) -> bool:
         return True
 
     except PermissionError as e:
-        logger.warning("[PERMISSIONS] Permission denied fixing %s: %s", path, e)
+        logger.warning(*safe_log_message("[PERMISSIONS] Permission denied fixing %s: %s", path, e))
         return False
     except OSError as e:
-        logger.warning("[PERMISSIONS] OS error fixing %s: %s", path, e)
+        logger.warning(*safe_log_message("[PERMISSIONS] OS error fixing %s: %s", path, e))
         return False

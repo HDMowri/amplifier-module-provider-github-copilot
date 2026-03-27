@@ -248,10 +248,11 @@ class TestToolSuppression:
                 assert tool.overrides_built_in_tool is True
 
     @pytest.mark.asyncio
-    async def test_no_available_tools_on_session(self) -> None:
-        """SDK session does not receive available_tools attribute.
+    async def test_available_tools_set_on_session(self) -> None:
+        """SDK session MUST receive available_tools attribute.
 
-        Contract: deny-destroy:ToolSuppression:MUST:1
+        Contract: deny-destroy:ToolSuppression:MUST:1 — available_tools MUST NOT be omitted
+        When no tools provided, available_tools=[] blocks SDK built-ins.
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
 
@@ -272,5 +273,6 @@ class TestToolSuppression:
             pass
 
         assert len(create_session_kwargs) == 1
-        # Should NOT have available_tools key
-        assert "available_tools" not in create_session_kwargs[0]
+        # MUST have available_tools key set to empty list (blocks SDK built-ins)
+        assert "available_tools" in create_session_kwargs[0]
+        assert create_session_kwargs[0]["available_tools"] == []

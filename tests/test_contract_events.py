@@ -111,23 +111,78 @@ class TestDomainEventTypes:
 class TestEventTranslation:
     """event-vocabulary:Bridge:MUST:2 — Test event translation."""
 
-    def test_translate_event_returns_domain_event_or_none(self) -> None:
-        """translate_event returns DomainEvent for BRIDGE, None otherwise."""
+    def test_translate_event_with_real_config(self) -> None:
+        """P2-7 FIX: translate_event correctly bridges SDK events to domain events.
+
+        Uses REAL config to verify actual production behavior, not empty config.
+        """
         from amplifier_module_provider_github_copilot.streaming import (
             DomainEvent,
-            EventConfig,
+            DomainEventType,
+            load_event_config,
             translate_event,
         )
 
-        # Create minimal config
-        config = EventConfig()
+        config = load_event_config()
 
-        # Test with a known bridged event type
-        sdk_event = {"type": "assistant.message_delta", "data": {"text": "hello"}}
+        # Test assistant.message_delta → CONTENT_DELTA (concrete input/output)
+        sdk_event = {"type": "assistant.message_delta", "data": {"delta_content": "test"}}
         result = translate_event(sdk_event, config)
 
-        # Result should be DomainEvent or None based on classification
-        assert result is None or isinstance(result, DomainEvent)
+        assert result is not None, "assistant.message_delta MUST be bridged"
+        assert isinstance(result, DomainEvent)
+        assert result.type == DomainEventType.CONTENT_DELTA
+
+    def test_content_delta_mapped_correctly(self) -> None:
+        """P2-7: Concrete assertion for content delta translation.
+
+        event-vocabulary:Bridge:MUST:2 — assistant.message_delta → CONTENT_DELTA
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            load_event_config,
+            translate_event,
+        )
+
+        # Use load_event_config() to get actual config with bridge mappings
+        config = load_event_config()
+        sdk_event = {"type": "assistant.message_delta", "data": {"delta_content": "Hello"}}
+        result = translate_event(sdk_event, config)
+
+        # P2-7: Verify SPECIFIC mapping, not just type
+        assert result is not None, "assistant.message_delta should be bridged"
+        assert isinstance(result, DomainEvent)
+        assert result.type == DomainEventType.CONTENT_DELTA, (
+            f"Expected CONTENT_DELTA, got {result.type}"
+        )
+
+    def test_usage_event_mapped_correctly(self) -> None:
+        """P2-7: Concrete assertion for usage event translation.
+
+        event-vocabulary:Bridge:MUST:2 — assistant.usage → USAGE
+        """
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            load_event_config,
+            translate_event,
+        )
+
+        # Use load_event_config() to get actual config with bridge mappings
+        config = load_event_config()
+        sdk_event = {
+            "type": "assistant.usage",
+            "data": {"input_tokens": 10, "output_tokens": 20},
+        }
+        result = translate_event(sdk_event, config)
+
+        assert result is not None, "assistant.usage should be bridged"
+        assert isinstance(result, DomainEvent)
+        # DomainEventType is USAGE_UPDATE (not USAGE)
+        assert result.type == DomainEventType.USAGE_UPDATE, (
+            f"Expected USAGE_UPDATE, got {result.type}"
+        )
 
     def test_unknown_events_dropped(self) -> None:
         """event-vocabulary:Drop:MUST:1 — Unknown events should be dropped."""

@@ -134,9 +134,7 @@ class EventRouter:
         # Classify event
         is_idle = is_idle_event(event_type, idle_events=self._config.idle_event_types)
         is_err = is_error_event(event_type, error_events=self._config.error_event_types)
-        is_usage = is_usage_event(
-            event_type, usage_events=self._config.usage_event_types
-        )
+        is_usage = is_usage_event(event_type, usage_events=self._config.usage_event_types)
 
         logger.debug(
             "[EVENT_ROUTER] type=%s, is_idle=%s, is_error=%s, is_usage=%s",

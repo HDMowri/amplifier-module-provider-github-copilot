@@ -155,3 +155,64 @@ class TestProtocolParseToolCalls:
         # ToolCall should have 'arguments' attribute
         assert hasattr(tool_calls[0], "arguments")
         assert tool_calls[0].arguments == {"key": "value"}
+
+
+class TestConcreteProtocolBehavior:
+    """P2-7 FIX: Test actual protocol behavior, not just signatures.
+
+    These tests verify the protocol works correctly end-to-end,
+    not just that methods exist with correct signatures.
+    """
+
+    def test_provider_info_has_all_required_fields(self, provider: GitHubCopilotProvider) -> None:
+        """P2-7: get_info() returns ProviderInfo with all required fields populated."""
+        info = provider.get_info()
+
+        # Required fields MUST be non-empty
+        assert info.id, "id MUST be non-empty"
+        assert info.display_name, "display_name MUST be non-empty"
+        # Capabilities should be a list of strings
+        assert isinstance(info.capabilities, list), "capabilities MUST be a list"
+
+        # Specific capabilities MUST exist
+        assert "streaming" in info.capabilities, "streaming MUST be in capabilities"
+
+    def test_parse_tool_calls_handles_none_tool_calls(
+        self, provider: GitHubCopilotProvider
+    ) -> None:
+        """P2-7: parse_tool_calls handles response with tool_calls=None."""
+        response = MagicMock()
+        response.tool_calls = None
+
+        tool_calls = provider.parse_tool_calls(response)
+
+        assert tool_calls == [], "None tool_calls should return empty list"
+
+    def test_parse_tool_calls_handles_dict_arguments(self, provider: GitHubCopilotProvider) -> None:
+        """P2-7: parse_tool_calls handles tool calls with dict arguments."""
+        tc = MagicMock()
+        tc.id = "call_dict"
+        tc.name = "complex_tool"
+        args: dict[str, object] = {"nested": {"key": "value"}, "list": [1, 2, 3]}
+        tc.arguments = args
+
+        response = MagicMock()
+        response.tool_calls = [tc]
+
+        tool_calls = provider.parse_tool_calls(response)
+
+        assert len(tool_calls) == 1
+        # Verify nested structure preserved (type ignores for nested access)
+        result_args = tool_calls[0].arguments
+        assert "nested" in result_args
+        assert "list" in result_args
+        # Cast explicitly for type checking
+        nested_val = result_args["nested"]  # pyright: ignore[reportArgumentType]
+        assert isinstance(nested_val, dict)
+        assert nested_val["key"] == "value"
+        assert result_args["list"] == [1, 2, 3]  # pyright: ignore[reportArgumentType]
+
+    def test_provider_name_immutable(self, provider: GitHubCopilotProvider) -> None:
+        """P2-7: Provider name is immutable (read-only property)."""
+        with pytest.raises(AttributeError):
+            provider.name = "different-name"  # type: ignore[misc]

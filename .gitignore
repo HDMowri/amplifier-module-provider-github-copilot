@@ -11,6 +11,8 @@ appsettings.*.json
 
 # Agent instructions (local only - not for repo)
 .github/
+AGENTS.md
+.claude/
 
 # OS files
 **/.DS_Store

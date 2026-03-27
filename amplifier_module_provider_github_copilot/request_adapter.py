@@ -182,9 +182,7 @@ def _extract_content_block(block: Any) -> str:
 
     # ThinkingContent - extract thinking attribute with marker
     # Must check BEFORE TextContent because ThinkingContent also has text attr
-    if block_type == "thinking" or (
-        block_type is None and hasattr(block, "thinking")
-    ):
+    if block_type == "thinking" or (block_type is None and hasattr(block, "thinking")):
         thinking: str | None = getattr(block, "thinking", None) or _get("thinking")
         if thinking:
             return f"[Thinking: {thinking}]"

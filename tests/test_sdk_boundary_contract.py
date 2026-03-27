@@ -9,6 +9,8 @@ Contract: contracts/sdk-boundary.md
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from amplifier_module_provider_github_copilot.sdk_adapter.client import (
@@ -21,16 +23,15 @@ class TestSessionConfigContract:
     """Verify the session_config dict sent to SDK matches our contract."""
 
     @pytest.mark.asyncio
-    async def test_available_tools_must_not_be_set(self) -> None:
-        """SDK built-in tools MUST NOT use available_tools parameter.
+    async def test_available_tools_empty_when_no_tools_provided(self) -> None:
+        """available_tools MUST be set to [] when no Amplifier tools are provided.
 
-        available_tools=[] causes SDK whitelist behavior that prevents
-        the model from even suggesting tools. We use deny hooks instead.
+        This prevents SDK built-in tools (list_agents, bash, edit, etc.) from
+        appearing to the model. Setting available_tools=[] blocks all tools,
+        which is correct when no Amplifier tools exist.
 
-        Contract: deny-destroy:ToolSuppression:MUST:1 — available_tools NOT set
-        Contract: sdk-boundary:ToolForwarding:MUST:3 — MUST NOT set available_tools
-        SDK ref: copilot/types.py SessionConfig.available_tools
-        SDK ref: copilot/client.py lines 527-529 (available_tools is not None check)
+        Contract: deny-destroy:ToolSuppression:MUST:1 — MUST NOT omit available_tools
+        Contract: sdk-boundary:ToolForwarding:MUST:3 — available_tools always set
         """
         mock_client = ConfigCapturingMock()
         wrapper = CopilotClientWrapper(sdk_client=mock_client)
@@ -39,9 +40,40 @@ class TestSessionConfigContract:
             pass
 
         config = mock_client.last_config
-        # Bug #1 Fix: available_tools=[] was silently disabling all tools
-        # By NOT setting available_tools, we let deny hook capture tool requests
-        assert "available_tools" not in config, "available_tools MUST NOT be set"
+        # Contract v1.2: available_tools MUST be set (not omitted)
+        # When no tools provided, available_tools=[] prevents SDK built-ins from appearing
+        assert "available_tools" in config, "available_tools MUST be set"
+        assert config["available_tools"] == [], "available_tools MUST be [] when no tools"
+
+    @pytest.mark.asyncio
+    async def test_available_tools_allowlist_when_tools_provided(self) -> None:
+        """available_tools MUST be set to Amplifier tool names when tools are provided.
+
+        This creates an allowlist - only the provided tools are visible to the model.
+        SDK built-ins are blocked because they're not in the allowlist.
+
+        Contract: deny-destroy:Allowlist:MUST:1 — available_tools = tool names
+        Contract: sdk-boundary:ToolForwarding:MUST:1 — tools forwarded to session
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        # Provide some tools as dicts (simulating Amplifier's ToolSpec objects)
+        empty_params: dict[str, Any] = {}
+        tools: list[dict[str, Any]] = [
+            {"name": "search", "description": "Search the web", "parameters": empty_params},
+            {"name": "write_file", "description": "Write a file", "parameters": empty_params},
+        ]
+
+        async with wrapper.session(model="gpt-4o", tools=tools):
+            pass
+
+        config = mock_client.last_config
+        # available_tools should be set to the allowlist of tool names
+        assert "available_tools" in config, "available_tools MUST be set"
+        assert config["available_tools"] == ["search", "write_file"], (
+            "available_tools must be the list of tool names"
+        )
 
     @pytest.mark.asyncio
     async def test_system_message_uses_replace_mode(self) -> None:
@@ -313,8 +345,8 @@ class TestToolForwardingContract:
 
         Contract: sdk-boundary:ToolForwarding:MUST:4
 
-        available_tools IS set to Amplifier tool names to whitelist only those
-        tools, preventing SDK built-in tools (like list_agents) from being
+        available_tools IS set to Amplifier tool names to create an allowlist of
+        those tools, preventing SDK built-in tools (like list_agents) from being
         visible to the model.
         """
         mock_client = ConfigCapturingMock()
@@ -329,7 +361,7 @@ class TestToolForwardingContract:
 
         config = mock_client.last_config
         # available_tools SHOULD be set to just the Amplifier tool names
-        assert "available_tools" in config, "available_tools MUST be set to whitelist"
+        assert "available_tools" in config, "available_tools MUST be set to allowlist"
         assert config["available_tools"] == ["bash"], (
             "available_tools must equal Amplifier tool names"
         )
@@ -345,12 +377,12 @@ class TestConfigInvariants:
     # available_tools removed - Bug #1 fix: setting it to [] was disabling all tools
     INVARIANTS: dict[str, object] = {
         "streaming": True,  # Required for event capture
+        "available_tools": [],  # Contract v1.2: MUST be set (empty when no tools)
     }
 
-    # Fields that must NOT be present (Bug #1 fix)
-    ABSENT_INVARIANTS = [
-        "available_tools",  # Setting to [] silently disables tools via SDK whitelist
-    ]
+    # Fields that must NOT be present (were for Bug #1 fix, now obsolete)
+    # Contract v1.2 corrected: available_tools MUST be set, not absent
+    ABSENT_INVARIANTS: list[str] = []
 
     CALLABLE_INVARIANTS = [
         "on_permission_request",  # Always set
@@ -406,8 +438,10 @@ class TestConfigInvariants:
             pass
 
         config = mock_client.last_config
-        # Bug #1 fix: available_tools must NOT be set
-        assert "available_tools" not in config
+        # Contract v1.2: available_tools MUST be set (not omitted)
+        # When no tools provided, available_tools=[] prevents SDK built-ins
+        assert "available_tools" in config
+        assert config["available_tools"] == []
         assert config.get("streaming") is True
 
     @pytest.mark.asyncio

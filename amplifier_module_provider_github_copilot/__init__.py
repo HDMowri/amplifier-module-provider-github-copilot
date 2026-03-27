@@ -170,7 +170,12 @@ async def _acquire_shared_client() -> CopilotClientWrapper:
                 try:
                     await _shared_client.close()
                 except Exception as close_err:
-                    logger.warning(f"[SINGLETON] Error closing unhealthy client: {close_err}")
+                    from .security_redaction import redact_sensitive_text
+
+                    logger.warning(
+                        "[SINGLETON] Error closing unhealthy client: %s",
+                        redact_sensitive_text(close_err),
+                    )
                 _shared_client = None
                 _shared_client_refcount = 0
 
@@ -211,7 +216,12 @@ async def _release_shared_client() -> None:
                 try:
                     await _shared_client.close()
                 except Exception as close_err:
-                    logger.warning(f"[SINGLETON] Error closing shared client: {close_err}")
+                    from .security_redaction import redact_sensitive_text
+
+                    logger.warning(
+                        "[SINGLETON] Error closing shared client: %s",
+                        redact_sensitive_text(close_err),
+                    )
                 finally:
                     _shared_client = None
 
@@ -244,10 +254,14 @@ async def mount(
         shared_client = await _acquire_shared_client()
         logger.info("[MOUNT] Acquired shared client (singleton)")
     except TimeoutError as e:
-        logger.error(f"[MOUNT] Failed to acquire shared client: {e}")
+        from .security_redaction import redact_sensitive_text
+
+        logger.error("[MOUNT] Failed to acquire shared client: %s", redact_sensitive_text(e))
         return None
     except Exception as e:
-        logger.error(f"[MOUNT] Error acquiring shared client: {e}")
+        from .security_redaction import redact_sensitive_text
+
+        logger.error("[MOUNT] Error acquiring shared client: %s", redact_sensitive_text(e))
         return None
 
     try:
@@ -274,7 +288,13 @@ async def mount(
         # This matches the production provider pattern
         # Contract: security — Only log exception type/message at ERROR, not full traceback
         # (traceback may contain sensitive request data)
-        logger.error(f"[MOUNT] Failed to mount GitHubCopilotProvider: {type(e).__name__}: {e}")
+        from .security_redaction import redact_sensitive_text
+
+        logger.error(
+            "[MOUNT] Failed to mount GitHubCopilotProvider: %s: %s",
+            type(e).__name__,
+            redact_sensitive_text(e),
+        )
         # Full traceback at DEBUG level only (security: avoid leaking sensitive data)
         logger.debug("[MOUNT] Mount failure traceback", exc_info=True)
         return None

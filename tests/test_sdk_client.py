@@ -39,7 +39,9 @@ class TestSessionYieldsRawSession:
     """session() yields the raw SDK session, not a wrapper."""
 
     @pytest.mark.asyncio
-    async def test_session_yields_raw_sdk_session(self) -> None:
+    async def test_session_yields_session_handle(self) -> None:
+        """P2-11: session() yields SessionHandle façade, not raw SDK session."""
+        from amplifier_module_provider_github_copilot.sdk_adapter import SessionHandle
         from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
 
         mock_sdk_session = AsyncMock()
@@ -52,7 +54,9 @@ class TestSessionYieldsRawSession:
         wrapper = CopilotClientWrapper(sdk_client=mock_sdk_client)
 
         async with wrapper.session(model="gpt-4") as session:
-            assert session is mock_sdk_session
+            # Should be SessionHandle, not raw SDK session
+            assert isinstance(session, SessionHandle)
+            assert session.session_id == "sess-raw"
 
 
 class TestSessionContextManager:

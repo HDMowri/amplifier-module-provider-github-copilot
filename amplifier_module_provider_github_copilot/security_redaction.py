@@ -66,6 +66,16 @@ _GITHUB_TOKEN_PATTERNS = [
     re.compile(r"\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b"),  # Fine-grained PAT
 ]
 
+# JWT-like patterns (three base64 segments separated by dots)
+# Covers: access tokens, ID tokens, Copilot agent tokens
+_JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+
+# Opaque bearer tokens (long alphanumeric strings that look like tokens)
+# Catches tokens that don't match specific patterns but look suspicious
+_OPAQUE_TOKEN_PATTERN = re.compile(
+    r"\b[A-Za-z0-9_-]{40,}\b"  # 40+ chars, likely a token
+)
+
 
 def redact_sensitive_text(value: object) -> str:
     """Return a log-safe string with secret values redacted.
@@ -102,6 +112,13 @@ def redact_sensitive_text(value: object) -> str:
     for pattern in _GITHUB_TOKEN_PATTERNS:
         text = pattern.sub(REDACTED, text)
 
+    # P2-9: Redact JWT-like tokens (base64.base64.base64)
+    text = _JWT_PATTERN.sub(REDACTED, text)
+
+    # P2-9: Redact opaque tokens (40+ char alphanumeric strings)
+    # Only if they look like tokens (not already redacted, not common words)
+    text = _OPAQUE_TOKEN_PATTERN.sub(REDACTED, text)
+
     return text
 
 
@@ -112,6 +129,9 @@ def _count_secrets(text: str) -> int:
     count += len(_KEY_VALUE_PATTERN.findall(text))
     for pattern in _GITHUB_TOKEN_PATTERNS:
         count += len(pattern.findall(text))
+    # P2-9: Include JWT and opaque tokens in count
+    count += len(_JWT_PATTERN.findall(text))
+    count += len(_OPAQUE_TOKEN_PATTERN.findall(text))
     return count
 
 
@@ -132,20 +152,23 @@ def redact_exception_message(exc: BaseException) -> str:
     return redact_sensitive_text(str(exc))
 
 
-def safe_log_message(message: str, *args: Any) -> tuple[str, tuple[Any, ...]]:
+def safe_log_message(message: str, *args: Any) -> tuple[str, ...]:
     """Prepare a log message with redacted arguments.
 
     Use with logging: logger.info(*safe_log_message("Error: %s", exc))
+
+    The function redacts each argument and returns a tuple that can be
+    directly unpacked into logger methods.
 
     Args:
         message: Log message format string.
         *args: Arguments to redact before formatting.
 
     Returns:
-        Tuple of (message, redacted_args) for use with logger.
+        Tuple of (message, *redacted_args) for unpacking with * operator.
 
     Contract: behaviors:Logging:MUST:4
 
     """
     redacted_args = tuple(redact_sensitive_text(arg) for arg in args)
-    return message, redacted_args
+    return (message, *redacted_args)
