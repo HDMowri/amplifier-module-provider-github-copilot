@@ -1,11 +1,14 @@
 # Contract: Streaming
 
 ## Version
-- **Current:** 1.3 (Completion-Guard-Usage-SessionLifecycle)
-- **Module Reference:** amplifier_module_provider_github_copilot/streaming.py
+- **Current:** 1.4 (EventRouter-Extracted)
+- **Module Reference:** 
+  - `amplifier_module_provider_github_copilot/streaming.py` (accumulator, event translation)
+  - `amplifier_module_provider_github_copilot/event_router.py` (SDK event routing)
 - **Kernel Types:** `amplifier_core.message_models` (Pydantic, NOT content_models dataclass)
 - **Status:** Specification
 - **History:**
+  - **1.4** — Extracted EventRouter from provider.py (separation of concerns)
   - **1.3** — Added completion guard, usage capture, session lifecycle anchors (bug fix documentation)
   - **1.2** — Fixed anchor prefix from `streaming:` to `streaming-contract:`, added missing anchors
   - **1.1** — Expert panel verified: ChatResponse.content uses message_models types
@@ -65,9 +68,9 @@ class ToolCall(BaseModel):
 ```
 SDK Event Stream
     │
-    ├─→ Event Handler
+    ├─→ EventRouter (event_router.py)
     │   ├─→ BRIDGE: Translate → Accumulate → (internal callback)
-    │   ├─→ CONSUME: Process internally
+    │   ├─→ CONSUME: Process internally (idle, usage, tool capture)
     │   └─→ DROP: Ignore
     │
     └─→ Final ChatResponse

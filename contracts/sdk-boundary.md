@@ -31,13 +31,15 @@ This contract ensures the provider remains testable, maintainable, and isolated 
 
 ```
 sdk_adapter/
-├── __init__.py        # Exports ONLY domain types and SDK-independent utilities
-├── _imports.py        # THE ONLY FILE with SDK imports (quarantined)
-├── _spec_utils.py     # SDK-independent utilities (find_spec, no imports)
-├── types.py           # Domain type definitions (SessionHandle, DomainEvent, SessionConfig)
-├── client.py          # SDK session lifecycle (create, send, close)
-├── extract.py         # SDK event → domain type extraction
-└── event_helpers.py   # Event classification and translation helpers
+├── __init__.py          # Exports ONLY domain types and SDK-independent utilities
+├── _imports.py          # THE ONLY FILE with SDK imports (quarantined)
+├── _spec_utils.py       # SDK-independent utilities (find_spec, no imports)
+├── types.py             # Domain type definitions (SessionHandle, DomainEvent, SessionConfig)
+├── client.py            # SDK session lifecycle (create, send, close)
+├── extract.py           # SDK event → domain type extraction
+├── event_helpers.py     # Event classification and translation helpers
+├── tool_capture.py      # Tool capture handler (sdk-protection.md)
+└── model_translation.py # SDK ModelInfo → CopilotModelInfo translation
 ```
 
 ---
