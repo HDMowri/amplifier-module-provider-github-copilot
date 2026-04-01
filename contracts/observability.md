@@ -1,11 +1,11 @@
 # Contract: Observability
 
 ## Version
-- **Current:** 1.1 (Status-Corrected)
+- **Current:** 1.2 (Dead Code Removed)
 - **Module Reference:** provider, completion
 - **Config:** amplifier_module_provider_github_copilot/config/observability.yaml
-- **Status:** PARTIAL IMPLEMENTATION
-- **Note:** Config exists; OTEL spans not implemented; event emission partial
+- **Status:** IMPLEMENTED (event emission)
+- **Note:** Event emission implemented. OTEL spans deferred to future version.
 
 ---
 
@@ -36,7 +36,11 @@ This contract defines observability policy for provider instrumentation. Observa
 
 ## OTEL Policy
 
-### MUST Constraints
+### Status: DEFERRED
+
+OpenTelemetry span support is deferred to a future version. The `otel:` config section was removed from observability.yaml as dead code.
+
+When implementing OTEL support:
 
 1. **MUST** be opt-in via config (NOT auto-detect from package presence)
 2. **MUST** gracefully degrade when opentelemetry not installed
@@ -44,7 +48,7 @@ This contract defines observability policy for provider instrumentation. Observa
 4. **MUST** redact sensitive data in span events
 5. **MUST NOT** create `gen_ai.chat` boundary spans (kernel responsibility)
 
-### Provider-Internal Spans
+### Provider-Internal Spans (Future)
 
 Provider MAY create internal spans for:
 - SDK session lifecycle
@@ -72,16 +76,11 @@ version: "1.0"
 
 events:
   raw_payloads: false
-
-otel:
-  enabled: false
-  span_events_redacted: true
-
-logging:
-  level: INFO
 ```
 
 **Note:** `events.enabled` was removed as dead config. Event emission is always on when observability is loaded. To disable events, don't subscribe to hooks.
+
+**Note:** `otel:` and `logging:` sections were removed as dead code — the Python implementation never parsed these values.
 
 ---
 
@@ -92,12 +91,14 @@ logging:
 | `observability:Events:MUST:1` | Guard hook calls |
 | `observability:Events:MUST:2` | Emit llm:request before send |
 | `observability:Events:MUST:3` | Emit llm:response after complete |
-| `observability:OTEL:MUST:1` | Opt-in via config |
-| `observability:OTEL:MUST:2` | Graceful degradation |
 | `observability:Verbosity:MUST:1` | Single raw_payloads flag |
 | `observability:Payload:SHOULD:1` | Type-safe content counting |
 | `observability:Payload:SHOULD:2` | Type-safe tool name extraction |
 | `observability:Redaction:SHOULD:1` | Redaction audit trail |
+
+**Deferred anchors (for future OTEL implementation):**
+- `observability:OTEL:MUST:1` — Opt-in via config
+- `observability:OTEL:MUST:2` — Graceful degradation
 
 ---
 

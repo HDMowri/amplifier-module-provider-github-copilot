@@ -1,7 +1,7 @@
 # Observability Policy
 # Contract: contracts/observability.md
 #
-# Controls event emission, OTEL spans, and logging.
+# Controls event emission for provider hooks.
 # Following PR-021 verbosity collapse: single flag, not tiered modes.
 #
 # Three-Medium Architecture: Event names and status values are POLICY,
@@ -40,13 +40,4 @@ events:
   # Contract: observability:Verbosity:MUST:1 — default OFF per security posture
   # WARNING: raw_payloads exposes full API payloads including potentially sensitive data.
   # Never enable in production. Use only for local debugging with non-sensitive test data.
-  raw_payloads: false  # Set true for forensic/perf analysis (includes redacted metadata)
-
-# OTEL spans (if opentelemetry installed)
-otel:
-  enabled: false  # OPT-IN, not auto-detect
-  span_events_redacted: true  # Always redact prompts in spans
-
-# Python logging levels
-logging:
-  level: INFO  # DEBUG for development
+  raw_payloads: false
