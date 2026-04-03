@@ -137,3 +137,36 @@ def test_package_has_version() -> None:
 
     assert isinstance(__version__, str)
     assert len(__version__) > 0
+
+
+class TestModuleGetattr:
+    """Tests for module-level __getattr__ fallback behavior."""
+
+    def test_unknown_attribute_raises_attribute_error(self) -> None:
+        """Accessing a truly unknown module attribute raises AttributeError.
+
+        N/A — module __getattr__ upgrade-compatibility path.
+        Line 357 in __init__.py — fallback for names NOT in REMOVED_SYMBOLS.
+        """
+        import amplifier_module_provider_github_copilot as m
+
+        with pytest.raises(AttributeError, match="has no attribute"):
+            _ = m.xyz_absolute_nonexistent_attribute_99887766  # type: ignore[attr-defined]
+
+    def test_removed_symbol_raises_import_error(self) -> None:
+        """Accessing a v1.x removed symbol raises ImportError with guidance.
+
+        N/A — module __getattr__ upgrade-compatibility path.
+        Line 355 in __init__.py — ImportError for names in REMOVED_SYMBOLS.
+        """
+        from amplifier_module_provider_github_copilot._deprecated import REMOVED_SYMBOLS
+
+        if not REMOVED_SYMBOLS:
+            pytest.skip("No removed symbols defined — nothing to test")
+
+        removed_name = next(iter(REMOVED_SYMBOLS))  # First entry
+
+        import amplifier_module_provider_github_copilot as m
+
+        with pytest.raises(ImportError):
+            _ = getattr(m, removed_name)

@@ -108,6 +108,13 @@ def extract_prompt_from_chat_request(request: Any) -> str:
 
     for msg in messages:
         role: str = getattr(msg, "role", "user")
+
+        # C-4: Skip system messages — they are forwarded via SDK session_config
+        # (system_message=..., mode="replace") to avoid dual-path injection.
+        # Contract: sdk-boundary:Config:MUST:2
+        if role == "system":
+            continue
+
         content: Any = getattr(msg, "content", "")
 
         # Format role marker
@@ -200,10 +207,17 @@ def _extract_content_block(block: Any) -> str:
     if block_type == "tool_call" or hasattr(block, "tool_name"):
         return ""
 
-    # ToolResultContent - format tool result
+    # ToolResultContent - format tool result including tool_call_id for correlation
+    # L-2: L-2: MUST include tool_call_id so the model can correlate results to calls.
+    # Contract: provider-protocol:complete:MUST — preserve tool call IDs
     if block_type == "tool_result" or hasattr(block, "output"):
         output: str | None = getattr(block, "output", None) or _get("output")
         if output:
+            tool_result_call_id: str | None = getattr(block, "tool_call_id", None) or _get(
+                "tool_call_id"
+            )
+            if tool_result_call_id:
+                return f"[Tool Result (id={tool_result_call_id}): {output}]"
             return f"[Tool Result: {output}]"
         return ""
 

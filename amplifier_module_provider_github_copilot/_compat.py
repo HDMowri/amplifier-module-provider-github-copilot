@@ -12,11 +12,6 @@ Contract: sdk-boundary:Membrane:MUST:1 — Single import point for runtime depen
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
-
 __all__ = ["ConfigurationError"]
 
 

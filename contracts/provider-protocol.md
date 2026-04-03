@@ -252,7 +252,9 @@ await self._emit_event("llm:response", {
         "input": response.usage.input_tokens,
         "output": response.usage.output_tokens,
     },
-    "finish_reason": response.finish_reason or "end_turn",
+    # Per amplifier-core proto: "stop", "tool_calls", "length", "content_filter"
+    # Not "end_turn" which is an SDK-specific input value
+    "finish_reason": response.finish_reason or "stop",
     "tool_calls": len(response.tool_calls) if response.tool_calls else 0,
 })
 
@@ -308,14 +310,19 @@ await self._emit_event(PROVIDER_RETRY, {
 - **MUST** handle missing coordinator gracefully (no raise)
 - **MUST** catch and log hook emission errors (no raise)
 
+The real hook emission mechanism is the `llm_lifecycle` async context manager in `observability.py`,
+not a `_emit_event()` method. The context manager handles request, response, and retry hooks
+as a unit, ensuring the response hook always fires even on error paths.
+
 ```python
-async def _emit_event(self, event_name: str, data: dict[str, Any]) -> None:
-    """Emit observability event if coordinator supports hooks."""
-    if self._coordinator and hasattr(self._coordinator, "hooks"):
-        try:
-            await self._coordinator.hooks.emit(event_name, data)
-        except Exception as e:
-            logger.warning(f"[PROVIDER] Failed to emit '{event_name}': {e}")
+# Real pattern — observability.py llm_lifecycle context manager
+from .observability import llm_lifecycle
+
+async with llm_lifecycle(coordinator, model) as ctx:
+    await ctx.emit_request(request_payload)
+    response = await sdk_call(...)
+    await ctx.emit_response(response)
+# llm_lifecycle emits llm:response on exit even if exception raised
 ```
 
 **Test Anchors:**
@@ -401,4 +408,4 @@ __all__ = ["mount", "GitHubCopilotProvider"]
 - [ ] `complete()` emits `llm:request` before SDK call
 - [ ] `complete()` emits `llm:response` after completion (success or error)
 - [ ] Retry loop emits `PROVIDER_RETRY` before sleep
-- [ ] `_emit_event()` handles missing coordinator gracefully
+- [ ] `llm_lifecycle` context manager handles missing coordinator gracefully

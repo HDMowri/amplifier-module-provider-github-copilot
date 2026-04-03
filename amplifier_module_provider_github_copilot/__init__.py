@@ -38,10 +38,10 @@ def _is_pytest_running() -> bool:
 # 2. pytest is actually running (prevents production misuse)
 _skip_sdk_check = _os.environ.get("SKIP_SDK_CHECK") and _is_pytest_running()
 
-if not _skip_sdk_check:
+if not _skip_sdk_check:  # pragma: no cover
     try:
         _pkg_version("github-copilot-sdk")
-    except _PkgNotFoundError as _e:  # pragma: no cover
+    except _PkgNotFoundError as _e:
         # SDK required; tests only run with SDK installed
         raise ImportError(
             "Required dependency 'github-copilot-sdk' is not installed. "
@@ -55,6 +55,7 @@ from typing import Any  # noqa: E402
 
 from amplifier_core import ModuleCoordinator  # noqa: E402
 
+from .config_loader import load_sdk_protection_config  # noqa: E402
 from .provider import GitHubCopilotProvider  # noqa: E402
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
@@ -79,41 +80,23 @@ CleanupFn = Callable[[], Awaitable[None]]
 
 _shared_client: CopilotClientWrapper | None = None
 _shared_client_refcount: int = 0
-_shared_client_lock: asyncio.Lock | None = None
-_shared_client_lock_guard = threading.Lock()  # Guards lazy lock creation
+# threading.Lock (not asyncio.Lock) — safe across event loops
+# asyncio.Lock is event-loop-scoped; awaiting it from a different loop raises
+# RuntimeError. threading.Lock works correctly in all asyncio / multi-loop scenarios.
+_state_lock = threading.Lock()
 _prewarm_task: asyncio.Task[None] | None = None  # Track prewarm task for cleanup
-
-# Lock timeout in seconds - hardcoded mechanism, not YAML policy
-# 30s timeout prevents indefinite blocking from deadlock
-_LOCK_TIMEOUT_SECONDS: float = 30.0
-
-
-def _get_lock() -> asyncio.Lock:
-    """Get or create the shared client lock (lazy initialization).
-
-    asyncio.Lock() requires an event loop; import-time creation
-    fails in test environments that don't have a loop yet.
-
-    Uses threading.Lock to prevent TOCTOU race where two coroutines
-    both see _shared_client_lock=None and create independent locks.
-
-    Returns:
-        The shared asyncio.Lock for singleton access.
-
-    """
-    global _shared_client_lock
-    if _shared_client_lock is None:
-        with _shared_client_lock_guard:
-            # Double-check after acquiring threading lock
-            if _shared_client_lock is None:
-                _shared_client_lock = asyncio.Lock()
-    return _shared_client_lock
 
 
 async def _acquire_shared_client() -> CopilotClientWrapper:
     """Acquire a reference to the shared client, creating if needed.
 
     Implements process-level singleton with refcounting.
+
+    Uses threading.Lock (not asyncio.Lock) so multiple event loops can share
+    the same singleton without triggering cross-loop RuntimeError.
+    CopilotClientWrapper() construction is synchronous, so all state mutations
+    fit inside the threading.Lock section. Async cleanup of an old unhealthy
+    client happens OUTSIDE the lock to avoid holding it during I/O.
 
     Returns:
         The shared CopilotClientWrapper instance.
@@ -124,53 +107,61 @@ async def _acquire_shared_client() -> CopilotClientWrapper:
     """
     global _shared_client, _shared_client_refcount
 
-    lock = _get_lock()
+    # Contract: sdk-protection:Singleton:MUST:8 — timeout sourced from YAML
+    lock_timeout = load_sdk_protection_config().singleton.lock_timeout_seconds
+    acquired = _state_lock.acquire(timeout=lock_timeout)
+    if not acquired:
+        raise TimeoutError(f"Failed to acquire shared client lock within {lock_timeout}s")
 
-    # 30s lock timeout prevents deadlock
-    try:
-        await asyncio.wait_for(lock.acquire(), timeout=_LOCK_TIMEOUT_SECONDS)
-    except TimeoutError as e:
-        raise TimeoutError(
-            f"Failed to acquire shared client lock within {_LOCK_TIMEOUT_SECONDS}s"
-        ) from e
+    result_client: CopilotClientWrapper | None = None
+    old_client: CopilotClientWrapper | None = None
 
     try:
-        # Check if existing client is healthy
         if _shared_client is not None:
             if _shared_client.is_healthy():
                 _shared_client_refcount += 1
-                return _shared_client
+                result_client = _shared_client
             else:
-                # Unhealthy client - close and replace
+                # Unhealthy — stash for async close OUTSIDE lock
                 import logging
 
-                logger = logging.getLogger(__name__)
-                logger.warning("[SINGLETON] Existing client unhealthy, replacing...")
-                try:
-                    await _shared_client.close()
-                except Exception as close_err:
-                    from .security_redaction import redact_sensitive_text
-
-                    logger.warning(
-                        "[SINGLETON] Error closing unhealthy client: %s",
-                        redact_sensitive_text(close_err),
-                    )
+                logging.getLogger(__name__).warning(
+                    "[SINGLETON] Existing client unhealthy, replacing..."
+                )
+                old_client = _shared_client
                 _shared_client = None
                 _shared_client_refcount = 0
 
-        # Create new client - wrap in try/except to ensure clean state on failure
-        try:
-            new_client = CopilotClientWrapper()
-            _shared_client = new_client
-            _shared_client_refcount = 1
-            return new_client
-        except Exception:
-            # Ensure clean state on failure
-            _shared_client = None
-            _shared_client_refcount = 0
-            raise
+        if result_client is None:
+            # Create new client — constructor is sync; safe inside threading.Lock
+            try:
+                new_client = CopilotClientWrapper()
+                _shared_client = new_client
+                _shared_client_refcount = 1
+                result_client = new_client
+            except Exception:
+                _shared_client = None
+                _shared_client_refcount = 0
+                raise
     finally:
-        lock.release()
+        _state_lock.release()
+
+    # Close old unhealthy client outside lock (async operation)
+    if old_client is not None:
+        try:
+            await old_client.close()
+        except Exception as close_err:
+            import logging
+
+            from .security_redaction import redact_sensitive_text
+
+            logging.getLogger(__name__).warning(
+                "[SINGLETON] Error closing unhealthy client: %s",
+                redact_sensitive_text(close_err),
+            )
+
+    assert result_client is not None  # guaranteed by the logic above
+    return result_client
 
 
 async def _release_shared_client() -> None:
@@ -180,29 +171,34 @@ async def _release_shared_client() -> None:
     """
     global _shared_client, _shared_client_refcount
 
-    lock = _get_lock()
+    client_to_close: CopilotClientWrapper | None = None
 
-    # Don't use timeout for release - always complete cleanup
-    async with lock:
+    with _state_lock:
         if _shared_client_refcount > 0:
             _shared_client_refcount -= 1
 
             if _shared_client_refcount == 0 and _shared_client is not None:
                 import logging
 
-                logger = logging.getLogger(__name__)
-                logger.info("[SINGLETON] Last reference released, closing shared client...")
-                try:
-                    await _shared_client.close()
-                except Exception as close_err:
-                    from .security_redaction import redact_sensitive_text
+                logging.getLogger(__name__).info(
+                    "[SINGLETON] Last reference released, closing shared client..."
+                )
+                client_to_close = _shared_client
+                _shared_client = None
 
-                    logger.warning(
-                        "[SINGLETON] Error closing shared client: %s",
-                        redact_sensitive_text(close_err),
-                    )
-                finally:
-                    _shared_client = None
+    # Close outside lock (async operation)
+    if client_to_close is not None:
+        try:
+            await client_to_close.close()
+        except Exception as close_err:
+            import logging
+
+            from .security_redaction import redact_sensitive_text
+
+            logging.getLogger(__name__).warning(
+                "[SINGLETON] Error closing shared client: %s",
+                redact_sensitive_text(close_err),
+            )
 
 
 async def mount(
@@ -234,8 +230,6 @@ async def mount(
 
     """
     import logging
-
-    from .config_loader import load_sdk_protection_config
 
     logger = logging.getLogger(__name__)
 
@@ -307,6 +301,9 @@ async def mount(
                     pass  # Expected
                 _prewarm_task = None
 
+            # Contract: streaming-contract:ProgressiveStreaming:SHOULD:3 — cancel tasks
+            await provider.cancel_emit_tasks()
+
             # Release our reference to the shared client.
             # provider.close() is NOT called here because the shared
             # client lifecycle is managed by the singleton, not the provider.
@@ -317,10 +314,9 @@ async def mount(
         # Release our reference if mount fails
         await _release_shared_client()
 
-        # Graceful degradation: log error and return None instead of crashing
-        # This matches the production provider pattern
-        # Contract: security — Only log exception type/message at ERROR, not full traceback
-        # (traceback may contain sensitive request data)
+        # Contract: provider-protocol:mount:MUST:2 — raise on failure so the
+        # framework can distinguish "provider broke" (exception) from "provider
+        # chose not to load" (return None).  Do NOT silently return None here.
         from .security_redaction import redact_sensitive_text
 
         logger.error(
@@ -359,4 +355,4 @@ def __getattr__(name: str) -> None:
 
     if name in REMOVED_SYMBOLS:
         raise ImportError(REMOVED_SYMBOLS[name])
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")  # pragma: no cover
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

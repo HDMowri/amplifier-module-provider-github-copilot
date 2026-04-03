@@ -571,3 +571,160 @@ class TestRedactDictNestedStructures:
         assert result["ratio"] == 3.14
         assert result["enabled"] is True
         assert result["nothing"] is None
+
+
+# ============================================================================
+# Test: EventRouter Error Handling Redaction (H-1 Fix)
+# ============================================================================
+
+
+class TestEventRouterErrorRedaction:
+    """Tests for EventRouter._handle_error secret redaction.
+
+    Contract: behaviors:Logging:MUST:4
+
+    H-1 Fix: Raw SDK error text must be redacted before storing in error_holder.
+    SDK error messages may contain tokens, prompts, or other sensitive data.
+    Defense-in-depth: redact at SOURCE (event_router) not just SINK (translate_sdk_error).
+    """
+
+    def test_handle_error_redacts_github_token_in_message(self) -> None:
+        """GitHub token in SDK error message is redacted in stored exception.
+
+        Contract: behaviors:Logging:MUST:4
+        Contract: behaviors:Logging:MUST:7 - GitHub token patterns
+
+        SDK error events may contain leaked tokens. The error message stored
+        in error_holder must have tokens redacted before any code can access it.
+        """
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from amplifier_module_provider_github_copilot.event_router import EventRouter
+        from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
+            ToolCaptureHandler,
+        )
+        from amplifier_module_provider_github_copilot.security_redaction import REDACTED
+
+        # Create minimal dependencies
+        queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+        idle_event = asyncio.Event()
+        error_holder: list[Exception] = []
+        usage_holder: list[dict[str, int]] = []
+        capture_handler = ToolCaptureHandler()
+        ttft_state = {"checked": False, "start_time": 0.0}
+
+        # Create event_config with proper attributes
+        event_config = MagicMock()
+        event_config.error_event_types = {"error", "session_error"}
+        event_config.idle_event_types = {"session.idle"}
+        event_config.usage_event_types = {"assistant.usage"}
+        event_config.content_event_types = set()
+        event_config.text_content_types = set()
+        event_config.thinking_content_types = set()
+        emit_streaming = MagicMock()
+
+        router = EventRouter(
+            queue=queue,
+            idle_event=idle_event,
+            error_holder=error_holder,
+            usage_holder=usage_holder,
+            capture_handler=capture_handler,
+            ttft_state=ttft_state,
+            ttft_threshold_ms=15000,
+            event_config=event_config,
+            emit_streaming_content=emit_streaming,
+        )
+
+        # Simulate SDK error event with GitHub token in message
+        github_token = "ghp_" + "a" * 36  # Valid GitHub PAT format
+        sdk_error_event = {
+            "type": "error",
+            "data": {"message": f"Authentication failed: token={github_token} was rejected"},
+        }
+
+        # Feed event to router
+        router(sdk_error_event)
+
+        # Verify error was captured
+        assert len(error_holder) == 1
+        error_message = str(error_holder[0])
+
+        # H-1 Fix: Token MUST be redacted in stored exception
+        assert github_token not in error_message, (
+            f"GitHub token leaked in error_holder: {error_message}"
+        )
+        assert REDACTED in error_message, (
+            f"REDACTED placeholder missing in error_holder: {error_message}"
+        )
+
+    def test_handle_error_redacts_bearer_token_in_message(self) -> None:
+        """Bearer token in SDK error message is redacted in stored exception.
+
+        Contract: behaviors:Logging:MUST:4
+        Contract: behaviors:Logging:MUST:9 - Bearer token patterns
+        """
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from amplifier_module_provider_github_copilot.event_router import EventRouter
+        from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
+            ToolCaptureHandler,
+        )
+        from amplifier_module_provider_github_copilot.security_redaction import REDACTED
+
+        # Create minimal dependencies
+        queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+        idle_event = asyncio.Event()
+        error_holder: list[Exception] = []
+        usage_holder: list[dict[str, int]] = []
+        capture_handler = ToolCaptureHandler()
+        ttft_state = {"checked": False, "start_time": 0.0}
+
+        # Create event_config with proper attributes
+        event_config = MagicMock()
+        event_config.error_event_types = {"error", "session_error"}
+        event_config.idle_event_types = {"session.idle"}
+        event_config.usage_event_types = {"assistant.usage"}
+        event_config.content_event_types = set()
+        event_config.text_content_types = set()
+        event_config.thinking_content_types = set()
+        emit_streaming = MagicMock()
+
+        router = EventRouter(
+            queue=queue,
+            idle_event=idle_event,
+            error_holder=error_holder,
+            usage_holder=usage_holder,
+            capture_handler=capture_handler,
+            ttft_state=ttft_state,
+            ttft_threshold_ms=15000,
+            event_config=event_config,
+            emit_streaming_content=emit_streaming,
+        )
+
+        # Simulate SDK error event with Bearer token in message
+        bearer_token = (
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ."
+            "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        )
+        sdk_error_event = {
+            "type": "error",
+            "data": {"message": f"Request failed: Authorization: Bearer {bearer_token}"},
+        }
+
+        # Feed event to router
+        router(sdk_error_event)
+
+        # Verify error was captured
+        assert len(error_holder) == 1
+        error_message = str(error_holder[0])
+
+        # H-1 Fix: Bearer token MUST be redacted in stored exception
+        assert bearer_token not in error_message, (
+            f"Bearer token leaked in error_holder: {error_message}"
+        )
+        assert REDACTED in error_message, (
+            f"REDACTED placeholder missing in error_holder: {error_message}"
+        )

@@ -48,6 +48,7 @@ from .config_loader import (
     load_streaming_config,
 )
 from .error_translation import (
+    AbortError,
     LLMError,
     ProviderUnavailableError,
     load_error_config,
@@ -410,6 +411,18 @@ class GitHubCopilotProvider:
                         )
                         raise
 
+                except asyncio.CancelledError:
+                    # C-2: asyncio.CancelledError is BaseException (not Exception).
+                    # Bare `except Exception` misses it.  Translate to AbortError
+                    # so the kernel receives a typed, non-retryable kernel error.
+                    # Contract: error-hierarchy:AbortError:MUST:1
+                    abort = AbortError("Request cancelled", provider="github-copilot")
+                    await ctx.emit_response_error(
+                        error_type=type(abort).__name__,
+                        error_message=str(abort),
+                    )
+                    raise abort from None
+
                 except Exception as e:
                     error_config_for_err = load_error_config()
                     translated = translate_sdk_error(
@@ -495,6 +508,17 @@ class GitHubCopilotProvider:
                         attachments=None,
                         system_message=internal_request.system_message,
                     )
+                except asyncio.CancelledError:
+                    # C-2: Same guard for the fake-tool correction path.
+                    # Contract: error-hierarchy:AbortError:MUST:1
+                    abort = AbortError("Request cancelled", provider="github-copilot")
+                    log_exhausted(ftd_config, correction_attempt + 1)
+                    await ctx.emit_response_error(
+                        error_type=type(abort).__name__,
+                        error_message=str(abort),
+                    )
+                    raise abort from None
+
                 except Exception as e:
                     # P1 Fix: Don't silently swallow exception - propagate to caller.
                     # Breaking here would return empty accumulator (silent data loss).
@@ -834,6 +858,21 @@ class GitHubCopilotProvider:
 
             logger.debug("[PROVIDER] Emit task failed: %s", redact_sensitive_text(exc))
 
+    async def cancel_emit_tasks(self) -> None:
+        """Cancel and await all pending background emit tasks.
+
+        Contract: streaming-contract:ProgressiveStreaming:SHOULD:3
+
+        Separates task cancellation from client close so that mount() cleanup
+        can cancel tasks without prematurely closing the shared client.
+        """
+        tasks_to_cancel = [t for t in self._pending_emit_tasks if not t.done()]
+        for task in tasks_to_cancel:
+            task.cancel()
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+        self._pending_emit_tasks.clear()
+
     async def close(self) -> None:
         """Clean up provider resources.
 
@@ -844,23 +883,20 @@ class GitHubCopilotProvider:
         Delegates to client.close() for SDK resource cleanup.
         Safe to call multiple times (idempotent).
         """
-        # Cancel pending emit tasks
-        # P2 Fix: Await cancelled tasks to let cleanup run before clearing.
-        # Without await, asyncio logs "Task was destroyed but it is pending!"
-        tasks_to_cancel = [t for t in self._pending_emit_tasks if not t.done()]
-        for task in tasks_to_cancel:
-            task.cancel()
-        if tasks_to_cancel:
-            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-        self._pending_emit_tasks.clear()
+        await self.cancel_emit_tasks()
 
         if hasattr(self, "_client") and self._client:
             await self._client.close()
 
-    def parse_tool_calls(self, response: Any) -> list[ToolCall]:
+    def parse_tool_calls(self, response: ChatResponse) -> list[ToolCall]:
         """Extract tool calls from response.
 
         Contract: provider-protocol:parse_tool_calls:MUST:1 through MUST:4
+
+        M-1 Fix: Type signature now matches kernel contract (ChatResponse).
+        The underlying tool_parsing module uses defensive getattr() so it
+        works with any response-like object, but the Provider interface
+        is contract-compliant.
 
         Delegates to tool_parsing module.
         """

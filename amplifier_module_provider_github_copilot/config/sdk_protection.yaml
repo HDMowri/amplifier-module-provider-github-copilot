@@ -52,6 +52,25 @@ session:
   # Contract: streaming-contract:abort-on-capture:MUST:1
   idle_timeout_seconds: 30.0
 
+  # Timeout for session.disconnect() call.
+  # Prevents indefinite hang on stubborn sessions during cleanup.
+  # Contract: sdk-protection:Session:MUST:3
+  disconnect_timeout_seconds: 30.0
+
+# ============================================================================
+# Singleton Policy
+# ============================================================================
+# Contract: sdk-protection:Singleton:MUST:8
+#
+# The provider uses a process-level singleton for CopilotClientWrapper.
+# This prevents N sub-agents from each spawning a ~500MB Electron subprocess.
+
+singleton:
+  # Timeout for acquiring the singleton threading.Lock.
+  # If this fires, another mount() is deadlocked — indicates a bug.
+  # Contract: sdk-protection:Singleton:MUST:8
+  lock_timeout_seconds: 30.0
+
 # ============================================================================
 # SDK Subprocess Configuration
 # ============================================================================

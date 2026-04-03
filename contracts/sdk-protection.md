@@ -52,7 +52,7 @@ When `session.explicit_abort` is true in config, the provider MUST call `session
 
 **Rationale:** Explicit abort signals to the SDK that we're done, rather than relying on timeout-based cleanup. This provides cleaner shutdown semantics.
 
-**Implementation:** Call in `_stream_with_session()` after tool capture detected
+**Implementation:** Call in `provider.py` `complete()` after tool capture detected, inside the `create_session()` context manager
 
 ### MUST-4: Abort Timeout
 

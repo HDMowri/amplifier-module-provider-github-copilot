@@ -206,6 +206,62 @@ class TestExtractContentBlock:
 
         assert "Dict content" in result
 
+    def test_image_block_excluded_from_prompt_text(self) -> None:
+        """sdk-boundary:ImagePassthrough:MUST:3 — Image blocks produce no text in prompt.
+
+        Images are extracted separately as BlobAttachments.
+        In the text prompt path, image blocks MUST be silently skipped.
+        No exception should be raised.
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            extract_prompt_from_chat_request,
+        )
+
+        content: list[Any] = [
+            {"type": "text", "text": "Here is an image:"},
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": "abc123"},
+            },
+        ]
+        request = MockChatRequest(messages=[MockMessage(role="user", content=content)])
+
+        # Must not raise
+        result = extract_prompt_from_chat_request(request)
+
+        # Text portion must be present
+        assert "Here is an image:" in result
+        # Image data must NOT appear in the text prompt
+        assert "abc123" not in result
+        assert "base64" not in result
+
+    def test_image_url_block_excluded_from_prompt_text(self) -> None:
+        """sdk-boundary:ImagePassthrough:MUST:3 — image_url type blocks produce no text.
+
+        URL image references are not supported by the SDK (base64-only).
+        When a block with type='image_url' appears, it must be silently skipped.
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            extract_prompt_from_chat_request,
+        )
+
+        content: list[Any] = [
+            {"type": "text", "text": "See this URL image:"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/image.png"},
+            },
+        ]
+        request = MockChatRequest(messages=[MockMessage(role="user", content=content)])
+
+        # Must not raise
+        result = extract_prompt_from_chat_request(request)
+
+        # Text portion must be present
+        assert "See this URL image:" in result
+        # URL must NOT appear in the text prompt
+        assert "https://example.com" not in result
+
 
 class TestBuildRequestPayloadForObservability:
     """Test build_request_payload_for_observability() function.

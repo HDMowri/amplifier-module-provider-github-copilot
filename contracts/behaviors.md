@@ -95,9 +95,11 @@ models:
     display_name: "Claude Opus 4.5"
     context_window: 200000
     max_output_tokens: 32000
+    # Per-model capabilities include vision (from SDK supports_vision)
+    # Provider-level only lists streaming, tools (what ALL models support)
     capabilities:
       - streaming
-      - tool_use
+      - tools
       - vision
 ```
 

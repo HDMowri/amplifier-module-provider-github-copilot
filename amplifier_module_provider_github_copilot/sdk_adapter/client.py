@@ -17,6 +17,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+from .._permissions import ensure_executable
+from .._platform import locate_cli_binary
+from ..config_loader import load_sdk_protection_config
 from ..error_translation import ErrorConfig, translate_sdk_error
 from ..security_redaction import safe_log_message
 
@@ -96,8 +99,8 @@ def deny_permission_request(request: Any) -> Any:
             message="Amplifier orchestrator controls all operations",
         )
     # SDK < 0.1.28 doesn't have PermissionRequestResult
-    # Return dict fallback
-    return {
+    # Return dict fallback (only reached with SDK < 0.1.28, not in current supported range)
+    return {  # pragma: no cover
         "kind": "denied-by-rules",
         "message": "Amplifier orchestrator controls all operations",
     }
@@ -153,8 +156,6 @@ def _resolve_sdk_log_level() -> str:
         SDK log level (none, error, warning, info, debug, all).
     """
     import logging
-
-    from ..config_loader import load_sdk_protection_config
 
     config = load_sdk_protection_config()
     env_var = config.sdk.log_level_env_var
@@ -303,6 +304,13 @@ class CopilotClientWrapper:
                     self._owned_client = CopilotClient()  # type: ignore[arg-type]
 
                 logger.debug("[CLIENT] CopilotClient created for %s", caller)
+
+                # sdk-boundary:BinaryResolution:MUST:6 — repair execute bits before start
+                # uv strips execute permissions from bundled binaries; repair here.
+                # No-op on Windows; safe to call if binary not found.
+                binary_path = locate_cli_binary()
+                if binary_path:
+                    ensure_executable(binary_path)
 
                 # Start client - clear on failure for retry
                 try:
@@ -453,7 +461,10 @@ class CopilotClientWrapper:
         finally:
             if sdk_session is not None:
                 try:
-                    await sdk_session.disconnect()  # type: ignore[union-attr]
+                    await asyncio.wait_for(
+                        sdk_session.disconnect(),  # type: ignore[union-attr]
+                        timeout=load_sdk_protection_config().session.disconnect_timeout_seconds,
+                    )
                     logger.debug("[CLIENT] Session disconnected")
                     self._disconnect_failures = 0  # Reset on success
                 except Exception as disconnect_err:

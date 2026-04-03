@@ -12,6 +12,7 @@ MUST constraints:
 Three-Medium Architecture:
 - Event names loaded from config/observability.yaml (YAML = policy)
 - This module provides emission helpers (Python = mechanism)
+- Exception: PROVIDER_RETRY uses kernel constant (protocol constant, not policy)
 """
 
 from __future__ import annotations
@@ -26,6 +27,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yaml
+
+# Use kernel constant for PROVIDER_RETRY to ensure protocol compliance
+# This is a protocol constant, not a policy value - must match kernel
+from amplifier_core.events import PROVIDER_RETRY
 
 if TYPE_CHECKING:
     from amplifier_core import ModuleCoordinator
@@ -375,6 +380,8 @@ class LlmLifecycleContext:
 
         Contract: provider-protocol:hooks:provider_retry:MUST:1
         Contract: behaviors:Logging:MUST:4 - Sanitize error messages
+
+        Uses kernel constant PROVIDER_RETRY (not YAML) to ensure protocol compliance.
         """
         from .security_redaction import redact_sensitive_text
 
@@ -382,7 +389,7 @@ class LlmLifecycleContext:
 
         await emit_event(
             self.coordinator,
-            self.config.event_names.provider_retry,
+            PROVIDER_RETRY,  # Use kernel constant, not YAML config
             {
                 "provider": self.provider_name,
                 "model": self.model,

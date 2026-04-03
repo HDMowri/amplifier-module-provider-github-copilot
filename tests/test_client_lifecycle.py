@@ -847,18 +847,21 @@ class TestPrewarmSubprocess:
         mock_coordinator = MagicMock()
         mock_coordinator.mount = AsyncMock()
 
-        # Patch config to enable pre-warming via monkeypatch
+        # Patch config to enable pre-warming via monkeypatch.
+        # Targets __init__.py's module-level binding (not config_loader module).
+        import amplifier_module_provider_github_copilot as provider_module
+
         try:
-            from amplifier_module_provider_github_copilot import config_loader
 
             def mock_load_config() -> Any:
                 mock_config = MagicMock()
                 mock_config.sdk.prewarm_subprocess = True
                 mock_config.sdk.log_level = "none"
                 mock_config.sdk.log_level_env_var = "COPILOT_SDK_LOG"
+                mock_config.singleton.lock_timeout_seconds = 30.0
                 return mock_config
 
-            monkeypatch.setattr(config_loader, "load_sdk_protection_config", mock_load_config)
+            monkeypatch.setattr(provider_module, "load_sdk_protection_config", mock_load_config)
 
             with (
                 patch(
@@ -1428,3 +1431,126 @@ class TestSDKLogLevelEnvOverride:
         result = _resolve_sdk_log_level()
         # Must fall back to YAML default, not use invalid value
         assert result == yaml_default
+
+
+# ===========================================================================
+# Phase 3: ensure_executable() wiring + singleton lock type
+# ===========================================================================
+
+
+class TestEnsureExecutableWiring:
+    """ensure_executable() must be called before CopilotClient.start() on Unix.
+
+    Contract: sdk-boundary:BinaryResolution:MUST:6 — MUST set execute bits.
+    The uv package manager strips execute permissions; without this call,
+    the SDK subprocess silently fails on fresh installs.
+    """
+
+    @pytest.mark.skipif(
+        __import__("sys").platform == "win32",
+        reason="ensure_executable is no-op on Windows; wiring tested on Unix",
+    )
+    @pytest.mark.asyncio
+    async def test_ensure_executable_called_before_start_on_unix(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ensure_executable called with binary path before CopilotClient.start().
+
+        Contract: sdk-boundary:BinaryResolution:MUST:6
+        """
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        call_order: list[str] = []
+        binary_path = Path("/usr/local/bin/copilot")
+
+        def mock_locate_cli_binary() -> Path | None:
+            return binary_path
+
+        def mock_ensure_executable(path: Path) -> bool:
+            call_order.append(f"ensure_executable:{path}")
+            return True
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                pass
+
+            async def start(self) -> None:
+                call_order.append("start")
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                mock_sess = AsyncMock()
+                mock_sess.session_id = "exe-test"
+                mock_sess.disconnect = AsyncMock()
+                return mock_sess
+
+            async def stop(self) -> None:
+                pass
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
+                mock_locate_cli_binary,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.ensure_executable",
+                mock_ensure_executable,
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
+            async with wrapper.session(model="gpt-4"):
+                pass
+
+        assert f"ensure_executable:{binary_path}" in call_order, (
+            "ensure_executable must be called before start()"
+        )
+        exe_idx = call_order.index(f"ensure_executable:{binary_path}")
+        start_idx = call_order.index("start")
+        assert exe_idx < start_idx, (
+            f"ensure_executable (pos {exe_idx}) must come before start() (pos {start_idx})"
+        )
+
+
+class TestSingletonLock:
+    """The module-level singleton lock must be threading.Lock, not asyncio.Lock.
+
+    Contract: provider-protocol:mount:MUST:5 — process-level singleton.
+    An asyncio.Lock is event-loop scoped; using one across multiple event loops
+    (e.g., in multi-turn test suites or multi-threaded Amplifier environments)
+    raises RuntimeError. threading.Lock works reliably across all loops/threads.
+    """
+
+    def test_state_lock_is_threading_lock(self) -> None:
+        """_state_lock must be threading.Lock, not asyncio.Lock.
+
+        Contract: provider-protocol:mount:MUST:5
+        """
+        import asyncio
+        import threading
+
+        import amplifier_module_provider_github_copilot as mod
+
+        assert hasattr(mod, "_state_lock"), (
+            "_state_lock (threading.Lock) must exist in __init__.py for cross-loop safety"
+        )
+        lock = mod._state_lock  # type: ignore[attr-defined]
+        assert isinstance(lock, type(threading.Lock())), (
+            f"_state_lock must be threading.Lock, got {type(lock)}. "
+            "asyncio.Lock is event-loop scoped and unsafe for cross-loop singleton access."
+        )
+        assert not isinstance(lock, asyncio.Lock), (
+            "Must NOT be asyncio.Lock — it binds to the creating event loop"
+        )
