@@ -31,6 +31,7 @@ This contract defines observability policy for provider instrumentation. Observa
 
 1. **SHOULD** include correlation IDs for tracing
 2. **SHOULD** include model ID in all events
+3. **SHOULD** include `sdk_pid` in `llm:response` for SDK log file correlation (`~/.copilot/logs/process-*-{pid}.log`)
 
 ---
 
@@ -91,6 +92,7 @@ events:
 | `observability:Events:MUST:1` | Guard hook calls |
 | `observability:Events:MUST:2` | Emit llm:request before send |
 | `observability:Events:MUST:3` | Emit llm:response after complete |
+| `observability:Events:SHOULD:3` | Include sdk_pid in llm:response |
 | `observability:Verbosity:MUST:1` | Single raw_payloads flag |
 | `observability:Payload:SHOULD:1` | Type-safe content counting |
 | `observability:Payload:SHOULD:2` | Type-safe tool name extraction |

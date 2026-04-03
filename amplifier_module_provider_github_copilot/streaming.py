@@ -130,6 +130,9 @@ class StreamingAccumulator:
     is_complete: bool = False
     # SDK session ID for observability correlation
     sdk_session_id: str | None = None
+    # SDK subprocess PID for log file correlation (~/.copilot/logs/process-*-{pid}.log)
+    # Contract: observability:Events:SHOULD:3
+    sdk_pid: str | None = None
 
     @property
     def text_content(self) -> str:

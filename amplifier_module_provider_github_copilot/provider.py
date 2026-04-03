@@ -561,6 +561,7 @@ class GitHubCopilotProvider:
                 content_blocks=len(response.content) if response.content else 0,
                 tool_calls=response_tool_calls,
                 sdk_session_id=accumulator.sdk_session_id,
+                sdk_pid=accumulator.sdk_pid,
                 raw_response=build_response_payload_for_observability(
                     response=response,
                     tool_calls=response_tool_calls,
@@ -637,6 +638,9 @@ class GitHubCopilotProvider:
             ) as sdk_session:
                 # Capture SDK session ID for observability correlation
                 accumulator.sdk_session_id = sdk_session.session_id
+                # Capture SDK subprocess PID for log file correlation
+                # Contract: observability:Events:SHOULD:3
+                accumulator.sdk_pid = client.copilot_pid
 
                 # Contract: behaviors:Streaming:MUST:4 — bounded queue, drop on full
                 event_queue: asyncio.Queue[Any] = asyncio.Queue(

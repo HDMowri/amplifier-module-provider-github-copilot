@@ -284,15 +284,18 @@ class LlmLifecycleContext:
         content_blocks: int,
         tool_calls: int,
         sdk_session_id: str | None = None,
+        sdk_pid: str | None = None,
         raw_response: dict[str, Any] | None = None,
     ) -> None:
         """Emit llm:response event for successful completion.
 
         Contract: observability:Events:MUST:3
+        Contract: observability:Events:SHOULD:3 — sdk_pid for log correlation
         Contract: observability:Verbosity:MUST:1 — raw_payloads flag controls inclusion
 
         Args:
             sdk_session_id: Copilot SDK session ID for log correlation.
+            sdk_pid: SDK subprocess PID for log file correlation.
         """
         elapsed_ms = int((time.time() - self.start_time) * 1000)
 
@@ -321,6 +324,11 @@ class LlmLifecycleContext:
         # SDK session ID for log correlation with Copilot SDK logs
         if sdk_session_id:
             payload["sdk_session_id"] = sdk_session_id
+
+        # SDK subprocess PID for direct log file correlation
+        # Contract: observability:Events:SHOULD:3
+        if sdk_pid:
+            payload["sdk_pid"] = sdk_pid
 
         # P3-14: Enforce raw_payloads policy
         if self.config.raw_payloads and raw_response:

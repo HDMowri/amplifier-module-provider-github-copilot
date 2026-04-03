@@ -479,10 +479,20 @@ class MockCopilotClientWrapper:
         self._session_kwargs = session_kwargs
         self._closed = False
         self._session: MockSDKSession | None = None
+        # Mock PID for testing sdk_pid emission
+        self._mock_copilot_pid: str | None = None
 
     def is_healthy(self) -> bool:
         """Always healthy for testing (no real subprocess)."""
         return not self._closed
+
+    @property
+    def copilot_pid(self) -> str | None:
+        """Return mock PID for testing sdk_pid emission.
+
+        Mirrors CopilotClientWrapper.copilot_pid property.
+        """
+        return self._mock_copilot_pid
 
     @asynccontextmanager
     async def session(
