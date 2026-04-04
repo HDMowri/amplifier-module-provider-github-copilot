@@ -138,26 +138,57 @@ class TestSDKVersionCompatibility:
         print(f"SDK version: {version}")
 
     def test_sdk_has_permission_request_result_type(self) -> None:
-        """SDK v0.1.33: PermissionRequestResult type must exist."""
+        """PermissionRequestResult must exist in the SDK (any supported version).
+
+        v0.2.0: copilot.types.PermissionRequestResult
+        v0.2.1+: copilot.session.PermissionRequestResult (copilot.types deleted)
+        """
+        PermissionRequestResult = None
+        # Follow the same fallback chain as _imports.py
         try:
             from copilot.types import PermissionRequestResult  # type: ignore[import-untyped]
-
-            assert PermissionRequestResult is not None
         except ImportError:
-            pytest.skip("SDK not installed or PermissionRequestResult not available")
+            try:
+                from copilot import PermissionRequestResult  # type: ignore[import-untyped,no-redef]
+            except ImportError:
+                try:
+                    from copilot.session import (  # type: ignore[import-untyped]
+                        PermissionRequestResult,  # type: ignore[no-redef]
+                    )
+                except ImportError:
+                    pytest.skip("SDK not installed or PermissionRequestResult not available")
+
+        assert PermissionRequestResult is not None
 
     def test_permission_request_result_has_kind_field(self) -> None:
-        """SDK v0.1.33: PermissionRequestResult must accept kind parameter."""
+        """PermissionRequestResult must accept kind parameter (any supported SDK version).
+
+        v0.2.0: copilot.types.PermissionRequestResult
+        v0.2.1+: copilot.session.PermissionRequestResult (copilot.types deleted)
+        """
+        PermissionRequestResult = None
+        # Follow the same fallback chain as _imports.py
         try:
             from copilot.types import PermissionRequestResult  # type: ignore[import-untyped]
+        except ImportError:
+            try:
+                from copilot import PermissionRequestResult  # type: ignore[import-untyped,no-redef]
+            except ImportError:
+                try:
+                    from copilot.session import (  # type: ignore[import-untyped]
+                        PermissionRequestResult,  # type: ignore[no-redef]
+                    )
+                except ImportError:
+                    pytest.skip("SDK not installed")
 
-            # Try creating with kind parameter
-            result = PermissionRequestResult(
+        if PermissionRequestResult is None:  # pragma: no cover
+            pytest.skip("SDK not installed")
+
+        try:
+            result = PermissionRequestResult(  # type: ignore[misc]
                 kind="denied-by-rules",
                 message="Test denial",
             )
-            assert result.kind == "denied-by-rules"
-        except ImportError:
-            pytest.skip("SDK not installed")
+            assert result.kind == "denied-by-rules"  # type: ignore[union-attr]
         except TypeError as e:
             pytest.fail(f"PermissionRequestResult signature changed: {e}")

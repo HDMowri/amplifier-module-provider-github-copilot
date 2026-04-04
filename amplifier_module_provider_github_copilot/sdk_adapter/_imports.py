@@ -63,13 +63,23 @@ else:
         except ImportError:
             SubprocessConfig = None  # type: ignore[misc,assignment]
 
-    # Optional SDK types for backward compatibility
-    # SDK < 0.1.28 doesn't have PermissionRequestResult
+    # PermissionRequestResult: multi-version fallback chain
+    # v0.2.0:  copilot.types.PermissionRequestResult
+    # v0.2.1+: copilot.types deleted (PR #871); moved to copilot.session
+    #          NOT re-exported from copilot root
+    # <0.1.28: did not exist yet
     try:
         from copilot.types import PermissionRequestResult  # type: ignore[import-untyped,no-redef]
     except ImportError:
-        # Provide a stub type for older SDK versions
-        PermissionRequestResult = None  # type: ignore[misc,assignment]
+        try:
+            from copilot import PermissionRequestResult  # type: ignore[import-untyped,no-redef]
+        except ImportError:
+            try:
+                from copilot.session import (  # type: ignore[import-untyped]
+                    PermissionRequestResult,  # type: ignore[no-redef]
+                )
+            except ImportError:
+                PermissionRequestResult = None  # type: ignore[misc,assignment]
 
 # =============================================================================
 # Exports

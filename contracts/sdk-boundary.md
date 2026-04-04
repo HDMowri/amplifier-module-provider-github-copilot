@@ -1,10 +1,13 @@
 # Contract: SDK Boundary (The Membrane)
 
 ## Version
-- **Current:** 1.2 (SDK v0.2.0 Breaking Changes)
+- **Current:** 1.3 (SDK v0.2.1 Breaking Changes)
 - **Module Reference:** amplifier_module_provider_github_copilot/sdk_adapter/
 - **Status:** Non-Negotiable Constraint
-- **Update:** 2026-03-21 — SDK v0.2.0 API: SubprocessConfig, create_session kwargs, send(prompt)
+- **Update:** 2026-04-04 — SDK v0.2.1: copilot.types deleted, PermissionRequestResult → copilot.session
+- **History:**
+  - **1.3** — SDK v0.2.1: copilot/types.py deleted. Multi-level fallback required for any type that lived there.
+  - **1.2** — SDK v0.2.0 API: SubprocessConfig, create_session kwargs, send(prompt)
 
 ---
 
@@ -26,6 +29,36 @@ This contract ensures the provider remains testable, maintainable, and isolated 
 3. **MUST NOT** allow SDK imports in ANY module outside `sdk_adapter/`
 4. **MUST NOT** export SDK types from `sdk_adapter/__init__.py`
 5. **MUST** fail at import time with a clear error if `github-copilot-sdk` is not installed (eager dependency check)
+6. **MUST** maintain multi-level fallback chains for any SDK type that has moved between versions: `copilot.types` (v0.2.0) → `copilot` root (potential re-export) → new canonical module (v0.2.1+) → `None`. This pattern is established by `SubprocessConfig` and `PermissionRequestResult` in `_imports.py`.
+
+### SDK Version History (Import Changes)
+
+#### SDK v0.2.1 (2026-03-20) — `copilot.types` deleted (PR #871, brettcannon)
+
+`copilot/types.py` was removed. Types redistributed to semantically owning modules:
+
+| Type | v0.2.0 location | v0.2.1+ location | Re-exported from root? |
+|------|-----------------|------------------|------------------------|
+| `PermissionRequestResult` | `copilot.types` | `copilot.session` | No |
+| `PermissionHandler` | `copilot.types` | `copilot.session` | No |
+| `SubprocessConfig` | `copilot.types` | `copilot.client` | **Yes** — `copilot.SubprocessConfig` works |
+| Tool types | `copilot.types` | `copilot.tools` | Yes |
+
+`copilot.__init__` now exports only: `CopilotClient`, `CopilotSession`, connection configs, `define_tool`.
+
+**Required fallback pattern** (established in `_imports.py`):
+```python
+try:
+    from copilot.types import X  # v0.2.0
+except ImportError:
+    try:
+        from copilot import X    # potential root re-export
+    except ImportError:
+        try:
+            from copilot.NEW_MODULE import X  # v0.2.1+ canonical location
+        except ImportError:
+            X = None  # pre-existence stub
+```
 
 ### Directory Structure
 

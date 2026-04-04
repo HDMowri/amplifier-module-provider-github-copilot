@@ -277,7 +277,11 @@ class TestSDKImportsRealPath:
                 )
 
     def test_permission_request_result_missing_sets_none(self) -> None:
-        """L48-52: PermissionRequestResult import fails → None stub (older SDK).
+        """PermissionRequestResult import fails → None stub (SDK < 0.1.28).
+
+        Simulates the oldest SDK without PermissionRequestResult in ANY module:
+        copilot.types absent, copilot root has no attribute, copilot.session absent.
+        All three fallback levels must fail to produce None.
 
         Contract: sdk-boundary:Membrane:MUST:1
         """
@@ -290,12 +294,11 @@ class TestSDKImportsRealPath:
             os.environ.pop("SKIP_SDK_CHECK", None)
 
             # Provide copilot (CopilotClient available) but no PermissionRequestResult
+            # anywhere — simulates SDK < 0.1.28 which predates the type entirely.
             mock_copilot = MagicMock()
-            del mock_copilot.types  # types submodule raises on access
-
-            # Build mock so copilot imports succeed but copilot.types raises ImportError
-            mock_copilot_types = MagicMock()
-            _ = mock_copilot_types.PermissionRequestResult  # access is fine — but import raises
+            mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
+            # Ensure root has no PermissionRequestResult attribute
+            del mock_copilot.PermissionRequestResult
 
             with patch.dict(
                 "sys.modules",
@@ -303,6 +306,7 @@ class TestSDKImportsRealPath:
                     "copilot": mock_copilot,
                     # None in sys.modules triggers ImportError on from-import
                     "copilot.types": None,
+                    "copilot.session": None,  # also absent on pre-0.1.28 SDK
                 },
             ):
                 mod = importlib.import_module(
@@ -371,6 +375,79 @@ class TestSDKImportsRealPath:
                 "_imports.py must fall back to 'from copilot import SubprocessConfig'."
             )
             assert mod.SubprocessConfig is mock_subprocess_config
+
+        finally:
+            if original_skip is not None:
+                os.environ["SKIP_SDK_CHECK"] = original_skip
+            else:
+                os.environ["SKIP_SDK_CHECK"] = "1"
+
+            sys.modules.pop("amplifier_module_provider_github_copilot.sdk_adapter._imports", None)
+
+            if original_module is not None:
+                sys.modules["amplifier_module_provider_github_copilot.sdk_adapter._imports"] = (
+                    original_module
+                )
+
+
+    def test_permission_request_result_falls_back_to_copilot_session(self) -> None:
+        """PermissionRequestResult MUST resolve from copilot.session when copilot.types absent.
+
+        Regression guard for SDK v0.2.1 breaking change: copilot/types.py was deleted
+        (PR #871). PermissionRequestResult moved to copilot.session and is NOT
+        re-exported from the copilot root package.
+
+        Before fix:  copilot.types fails → copilot root fails → PermissionRequestResult = None
+                     → deny_permission_request() returns dict → SDK calls .kind → AttributeError
+                     → wrong deny reason: "denied-no-approval-rule-and-could-not-request-from-user"
+
+        After fix:   copilot.types fails → copilot root fails → copilot.session succeeds
+                     → PermissionRequestResult is the real class → .kind works → "denied-by-rules"
+
+        Contract: sdk-boundary:ImportQuarantine:MUST:1
+        """
+        original_skip = os.environ.get("SKIP_SDK_CHECK")
+        original_module = sys.modules.pop(
+            "amplifier_module_provider_github_copilot.sdk_adapter._imports", None
+        )
+
+        try:
+            os.environ.pop("SKIP_SDK_CHECK", None)
+
+            # Simulate SDK v0.2.1:
+            # - copilot root has CopilotClient but NOT PermissionRequestResult
+            # - copilot.types is deleted (None → ImportError on from-import)
+            # - copilot.session has PermissionRequestResult
+            mock_prr = MagicMock(name="PermissionRequestResult")
+            mock_copilot = MagicMock()
+            mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
+            # Ensure root has no PermissionRequestResult attribute
+            del mock_copilot.PermissionRequestResult
+
+            mock_copilot_session = MagicMock()
+            mock_copilot_session.PermissionRequestResult = mock_prr
+
+            with patch.dict(
+                "sys.modules",
+                {
+                    "copilot": mock_copilot,
+                    "copilot.types": None,  # None → ImportError on from-import
+                    "copilot.session": mock_copilot_session,
+                },
+            ):
+                mod = importlib.import_module(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports"
+                )
+
+            # PermissionRequestResult MUST be resolved from copilot.session
+            assert mod.PermissionRequestResult is not None, (
+                "PermissionRequestResult is None when copilot.types is absent (SDK v0.2.1 "
+                "regression). _imports.py must fall back to "
+                "'from copilot.session import PermissionRequestResult'."
+            )
+            assert mod.PermissionRequestResult is mock_prr, (
+                "PermissionRequestResult must be the value from copilot.session, not a stub."
+            )
 
         finally:
             if original_skip is not None:

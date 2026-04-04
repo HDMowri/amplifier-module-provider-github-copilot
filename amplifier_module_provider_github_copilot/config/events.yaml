@@ -89,8 +89,9 @@ event_classifications:
     - session.resume
     - session.task_complete
     - hook.*
-    - elicitation.*
-    - command.*
+    - elicitation.*  # SDK v0.2.1: elicitation dialogs, provider-initiated UI — not our concern
+    - command.*      # SDK v0.2.1: slash command dispatch — provider does not handle commands
+    - capabilities.changed  # SDK v0.2.1: CLI host capability changes — no domain action
     - subagent.*
     - skill.*
     - user.*
