@@ -18,8 +18,11 @@ streaming_emission:
   text_content_types:
     - assistant.message_delta
     - assistant.streaming_delta
-  thinking_content_types:
-    - assistant.reasoning_delta
+  # thinking_content_types is intentionally empty: per-token ThinkingContent emission suppressed.
+  # Per-delta emission renders one 🧠 box per streaming chunk in the CLI.
+  # Full consolidated ThinkingContent is present in StreamingChatResponse.content_blocks.
+  # Contract: streaming-contract:ProgressiveStreaming:SHOULD:5
+  thinking_content_types: []
 
 event_classifications:
   bridge:

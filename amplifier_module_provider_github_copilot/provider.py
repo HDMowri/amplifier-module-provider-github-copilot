@@ -547,7 +547,7 @@ class GitHubCopilotProvider:
             # DEBUG: Log response details before returning to orchestrator
             logger.debug(
                 "[COMPLETE] Returning response: finish_reason=%s, tool_calls=%d, "
-                "content_blocks=%d, text_len=%d",
+                "content=%d, text_len=%d",
                 response.finish_reason,
                 response_tool_calls,
                 len(response.content) if response.content else 0,

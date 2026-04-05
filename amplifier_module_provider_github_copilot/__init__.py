@@ -47,7 +47,7 @@ def _check_sdk_version(version_str: str) -> None:
     """
     try:
         ver_parts = tuple(int(x) for x in version_str.split(".")[:2] if x.isdigit())
-    except (ValueError, TypeError):
+    except (ValueError, TypeError):  # pragma: no cover — malformed version string
         ver_parts = (0, 0)
     if ver_parts < (0, 2):
         raise ImportError(
@@ -347,8 +347,18 @@ async def mount(
             type(e).__name__,
             redact_sensitive_text(e),
         )
-        # Full traceback at DEBUG level only (security: avoid leaking sensitive data)
-        logger.debug("[MOUNT] Mount failure traceback", exc_info=True)
+        # Full traceback at DEBUG level — formatted and redacted before emission.
+        # Contract: behaviors:Security:MUST:2 — raw exc_info logging bypasses redaction;
+        # format to string first so redact_sensitive_text() can scrub tokens.
+        import logging as _logging
+        import traceback as _tb
+
+        if logger.isEnabledFor(_logging.DEBUG):
+            formatted_tb = "".join(_tb.format_exception(type(e), e, e.__traceback__))
+            logger.debug(
+                "[MOUNT] Mount failure traceback:\n%s",
+                redact_sensitive_text(formatted_tb),
+            )
         raise
 
 

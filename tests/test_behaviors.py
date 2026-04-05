@@ -951,7 +951,7 @@ class TestProductionPathWithMockClient:
         Contract: deny-destroy.md — Session MUST be destroyed even on error
         Replaces: test_completion.py::TestSessionLifecycle::test_session_destroyed_on_error
         """
-        from amplifier_core.llm_errors import NetworkError
+        from amplifier_core.llm_errors import ProviderUnavailableError
 
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
         from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
@@ -971,7 +971,7 @@ class TestProductionPathWithMockClient:
         request.stop = None
         request.stream = None
 
-        with pytest.raises(NetworkError):
+        with pytest.raises(ProviderUnavailableError):
             await provider.complete(request)
 
         # Session should still be disconnected despite error
@@ -1058,7 +1058,7 @@ class TestProductionPathWithMockClient:
         Contract: error-hierarchy.md — SDK errors MUST be translated
         Replaces: test_completion.py::TestErrorHandling::test_sdk_error_translated
         """
-        from amplifier_core.llm_errors import NetworkError
+        from amplifier_core.llm_errors import ProviderUnavailableError
 
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
         from tests.fixtures.sdk_mocks import MockCopilotClientWrapper
@@ -1078,10 +1078,11 @@ class TestProductionPathWithMockClient:
         request.stop = None
         request.stream = None
 
-        with pytest.raises(NetworkError) as exc_info:
+        with pytest.raises(ProviderUnavailableError) as exc_info:
             await provider.complete(request)
 
-        # Should be kernel NetworkError with provider info
+        # Should be kernel ProviderUnavailableError with provider info
+        # Contract: error-hierarchy:ConnectionError:MUST:1
         assert exc_info.value.provider == "github-copilot"
 
     @pytest.mark.asyncio

@@ -424,3 +424,58 @@ class TestVisionErrorTranslation:
 
         assert result.__cause__ is original
         assert result.provider == "github-copilot"
+
+
+class TestConnectionErrorMapping:
+    """Contract: error-hierarchy:ConnectionError:MUST:1
+
+    ConnectionError MUST map to ProviderUnavailableError, not NetworkError.
+    The contract table (error-hierarchy.md:71) is the governing truth.
+    errors.yaml had ConnectionError and ProcessExitedError grouped under NetworkError —
+    that contradicts the contract.
+    """
+
+    def test_connection_error_maps_to_provider_unavailable(self) -> None:
+        """error-hierarchy:ConnectionError:MUST:1 — ConnectionError → ProviderUnavailableError.
+
+        Connection refused = provider endpoint unreachable = provider-level failure.
+        """
+        from amplifier_module_provider_github_copilot.error_translation import (
+            load_error_config,
+            translate_sdk_error,
+        )
+
+        config = load_error_config()
+
+        class ConnectionError(Exception):  # noqa: A001
+            pass
+
+        result = translate_sdk_error(ConnectionError("connection refused"), config)
+
+        assert result.__class__.__name__ == "ProviderUnavailableError", (
+            f"ConnectionError must map to ProviderUnavailableError per "
+            f"error-hierarchy:ConnectionError:MUST:1, got {result.__class__.__name__}"
+        )
+        assert result.retryable is True
+
+    def test_process_exited_error_maps_to_network_error(self) -> None:
+        """error-hierarchy:ConnectionError:MUST:1 — ProcessExitedError → NetworkError.
+
+        Process exit = raw network/process transport failure = NetworkError.
+        """
+        from amplifier_module_provider_github_copilot.error_translation import (
+            load_error_config,
+            translate_sdk_error,
+        )
+
+        config = load_error_config()
+
+        class ProcessExitedError(Exception):
+            pass
+
+        result = translate_sdk_error(ProcessExitedError("process exited"), config)
+
+        assert result.__class__.__name__ == "NetworkError", (
+            f"ProcessExitedError must map to NetworkError, got {result.__class__.__name__}"
+        )
+        assert result.retryable is True

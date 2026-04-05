@@ -191,7 +191,9 @@ class TestSDKVersionCheck:
 
         Contract: sdk-boundary:Membrane:MUST:5
         """
-        from amplifier_module_provider_github_copilot import _check_sdk_version
+        from amplifier_module_provider_github_copilot import (
+            _check_sdk_version,  # type: ignore[reportPrivateUsage]
+        )
 
         for old_ver in ("0.1.0", "0.1.28", "0.0.1", "0.1.99"):
             with pytest.raises(ImportError, match="github-copilot-sdk"):
@@ -221,7 +223,9 @@ class TestSDKVersionCheck:
         Users must know how to fix it from the error message alone.
         Contract: sdk-boundary:Membrane:MUST:5
         """
-        from amplifier_module_provider_github_copilot import _check_sdk_version
+        from amplifier_module_provider_github_copilot import (
+            _check_sdk_version,  # type: ignore[reportPrivateUsage]
+        )
 
         with pytest.raises(ImportError) as exc_info:
             _check_sdk_version("0.1.28")
@@ -240,7 +244,9 @@ class TestSDKVersionCheck:
         Pre-release suffix, empty string, or non-numeric must be safely handled.
         Contract: sdk-boundary:Membrane:MUST:5 (robustness)
         """
-        from amplifier_module_provider_github_copilot import _check_sdk_version
+        from amplifier_module_provider_github_copilot import (
+            _check_sdk_version,  # type: ignore[reportPrivateUsage]
+        )
 
         # These have no valid semver minor → treated as (0, 0) → raise ImportError
         for weird_ver in ("", "unknown", "0.1.0rc1"):

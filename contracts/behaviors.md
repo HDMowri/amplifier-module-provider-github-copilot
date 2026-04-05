@@ -171,6 +171,45 @@ The `security_redaction.py` module **MUST** redact all of the following secret p
 
 ---
 
+## Security Policy
+
+### Prompt Serialization (OWASP A03: Injection Prevention)
+
+When building the prompt from multi-turn conversation history, user-controlled text
+is embedded alongside synthetic role markers (`[USER]`, `[ASSISTANT]`, etc.).
+
+**behaviors:Security:MUST:1** — The provider MUST escape any `[ALL_CAPS_WORD]` sequences
+in user-controlled content before embedding them in the prompt. Unescaped sequences
+matching the role delimiter format allow a malicious user message to inject fake role
+boundaries and impersonate the assistant or system.
+
+**Scope:** Applies to all user-controlled content: text blocks, thinking blocks, tool
+result outputs, and raw string message content. Does NOT apply to synthetic markers
+the provider itself generates.
+
+**Escaping mechanism:** Replace `[WORD]` (where WORD is two or more uppercase letters
+or underscores) with `\[WORD\]`, which preserves display fidelity while preventing
+LLM role-boundary interpretation.
+
+### Traceback Redaction
+
+**behaviors:Security:MUST:2** — Mount failure tracebacks logged at DEBUG level MUST
+be passed through `redact_sensitive_text()` before emission. Raw `exc_info=True`
+logging bypasses redaction and may leak tokens present in exception messages,
+URL strings, or local variable values captured in traceback frames.
+
+**Implementation:** Format the traceback to string via `traceback.format_exception()`,
+pipe through `redact_sensitive_text()`, then log as a plain string.
+
+### Test Anchors
+
+| Anchor | Clause |
+|--------|--------|
+| `behaviors:Security:MUST:1` | Role-marker injection escaped in user content |
+| `behaviors:Security:MUST:2` | Mount traceback redacted before DEBUG log |
+
+---
+
 ## Config Loading Policy
 
 ### MUST Constraints

@@ -60,7 +60,7 @@ else:
     except ImportError:
         try:
             from copilot import SubprocessConfig  # type: ignore[import-untyped,no-redef]
-        except ImportError:
+        except ImportError:  # pragma: no cover — SDK 0.2.0 always has SubprocessConfig
             SubprocessConfig = None  # type: ignore[misc,assignment]
 
     # PermissionRequestResult: multi-version fallback chain

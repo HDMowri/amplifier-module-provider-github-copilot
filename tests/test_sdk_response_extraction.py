@@ -375,3 +375,58 @@ class TestReasoningOpaqueExtraction:
         # Should handle gracefully - no error, just no reasoning_opaque key
         assert "reasoning_opaque" not in result or result.get("reasoning_opaque") is None
         assert result.get("reasoning_text") == "Simple reasoning"
+
+
+class TestToolCallIdAndNameFallback:
+    """Fallback extraction for tool_call_id and tool_name attributes.
+
+    Lines ~117-125 in sdk_adapter/extract.py — SDK events that store
+    tool identity in 'tool_call_id'/'tool_name' rather than 'id'/'name'.
+    Contract: sdk-boundary:Membrane:MUST:1 — SDK type isolation.
+    """
+
+    def test_extract_event_fields_uses_tool_call_id_when_id_absent(self) -> None:
+        """If event has no 'id' but has 'tool_call_id', use tool_call_id as id.
+
+        Line ~119-120 in sdk_adapter/extract.py.
+        SDK tool result events may use 'tool_call_id' not 'id'.
+        Contract: sdk-boundary:Membrane:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.extract import (
+            extract_event_fields,
+        )
+
+        class MockToolResultEvent:
+            """Mimics a SDK tool_result event with tool_call_id, not id."""
+            type = "tool_result"
+            tool_call_id = "tc-fallback-99"
+            # Deliberately no 'id' attribute
+
+        result = extract_event_fields(MockToolResultEvent())
+
+        assert result.get("id") == "tc-fallback-99", (
+            f"tool_call_id must populate 'id' when 'id' absent. Got: {result.get('id')!r}"
+        )
+
+    def test_extract_event_fields_uses_tool_name_when_name_absent(self) -> None:
+        """If event has no 'name' but has 'tool_name', use tool_name as name.
+
+        Line ~124-125 in sdk_adapter/extract.py.
+        SDK tool events may use 'tool_name' not 'name'.
+        Contract: sdk-boundary:Membrane:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.extract import (
+            extract_event_fields,
+        )
+
+        class MockToolNameEvent:
+            """Mimics a SDK event with tool_name, not name."""
+            type = "tool_use_complete"
+            tool_name = "read_file_fallback"
+            # Deliberately no 'name' attribute
+
+        result = extract_event_fields(MockToolNameEvent())
+
+        assert result.get("name") == "read_file_fallback", (
+            f"tool_name must populate 'name' when 'name' absent. Got: {result.get('name')!r}"
+        )

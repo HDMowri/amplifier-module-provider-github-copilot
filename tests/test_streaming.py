@@ -496,6 +496,75 @@ class TestStreamingAccumulator:
         assert text_blocks[0].text == "Hello world"
         assert text_blocks[1].text == "Done."
 
+    def test_content_block_order_preserved_text_then_thinking(self) -> None:
+        """Contract: streaming-contract:StreamingResponse:MUST:2 — content block order
+        MUST match the order in which blocks arrived from the SDK.
+
+        P1-3: Extended thinking models (Anthropic) may send thinking BEFORE text.
+        The accumulator was emitting all text blocks first, then thinking — regardless
+        of actual arrival order. This breaks multi-turn context reconstruction for
+        models that interleave reasoning and output.
+
+        Sequence tested: TEXT → THINKING → TEXT
+        Expected order:  TextBlock("A") → ThinkingBlock("T") → TextBlock("B")
+        Wrong order:     TextBlock("A") → TextBlock("B") → ThinkingBlock("T")
+        """
+        from amplifier_core.message_models import TextBlock, ThinkingBlock
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        acc = StreamingAccumulator()
+        acc.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "A"}, "TEXT"))
+        acc.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "T"}, "THINKING"))
+        acc.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "B"}, "TEXT"))
+        acc.add(DomainEvent(DomainEventType.TURN_COMPLETE, {}))
+
+        response = acc.to_chat_response()
+
+        content_types = [type(b).__name__ for b in response.content]
+        assert content_types == ["TextBlock", "ThinkingBlock", "TextBlock"], (
+            f"Content order must match arrival order TEXT→THINKING→TEXT. "
+            f"Got: {content_types}. response.content: {response.content}"
+        )
+        text_blocks = [b for b in response.content if isinstance(b, TextBlock)]
+        thinking_blocks = [b for b in response.content if isinstance(b, ThinkingBlock)]
+        assert text_blocks[0].text == "A"
+        assert thinking_blocks[0].thinking == "T"
+        assert text_blocks[1].text == "B"
+
+    def test_content_block_order_thinking_first(self) -> None:
+        """Contract: streaming-contract:StreamingResponse:MUST:2 — thinking-first order.
+
+        Some Anthropic models (extended thinking) send THINKING before TEXT.
+        Sequence: THINKING → TEXT
+        Expected: ThinkingBlock → TextBlock
+        """
+        from amplifier_core.message_models import TextBlock, ThinkingBlock
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        acc = StreamingAccumulator()
+        acc.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "My reasoning"}, "THINKING"))
+        acc.add(DomainEvent(DomainEventType.CONTENT_DELTA, {"text": "My answer"}, "TEXT"))
+        acc.add(DomainEvent(DomainEventType.TURN_COMPLETE, {}))
+
+        response = acc.to_chat_response()
+
+        content_types = [type(b).__name__ for b in response.content]
+        assert content_types == ["ThinkingBlock", "TextBlock"], (
+            f"Thinking-first order not preserved. Got: {content_types}"
+        )
+        assert isinstance(response.content[0], ThinkingBlock)
+        assert isinstance(response.content[1], TextBlock)
+
 
 class TestAccumulatedResponse:
     """Tests for AccumulatedResponse dataclass."""
@@ -868,6 +937,95 @@ class TestStreamingChatResponse:
         assert "TextContent" in types
         assert "ThinkingContent" in types
         assert "ToolCallContent" in types
+
+    def test_content_list_contains_tool_call_block_for_kernel_context(self) -> None:
+        """Contract: streaming-contract:StreamingResponse:MUST:2 — ChatResponse.content
+        MUST contain ToolCallBlock (not ToolCall) for kernel context persistence.
+
+        ChatResponse.content is typed as list[ContentBlockUnion] (message_models.py:266).
+        ContentBlockUnion is a discriminated union on the `type` field. ToolCallBlock
+        (type="tool_call", field=`input: dict`) is a member. ToolCall (field=`arguments`)
+        is NOT in ContentBlockUnion and belongs only in ChatResponse.tool_calls.
+
+        This test was RED before the fix: streaming.py used the wrong type (ToolCall)
+        in content, which cannot satisfy list[ContentBlockUnion].
+
+        Evidence:
+        - amplifier_core/message_models.py:61  — ToolCallBlock(type, id, name, input)
+        - amplifier_core/message_models.py:215 — ToolCall(id, name, arguments) — NOT in union
+        - amplifier_core/message_models.py:266 — ChatResponse.content: list[ContentBlockUnion]
+        """
+        from amplifier_core.message_models import ToolCallBlock
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "tc1", "name": "read_file", "arguments": {"path": "test.py"}},
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "tool_use"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        # content MUST contain a ToolCallBlock instance (ContentBlockUnion member)
+        tool_call_blocks = [b for b in response.content if isinstance(b, ToolCallBlock)]
+        assert len(tool_call_blocks) == 1, (
+            f"Expected 1 ToolCallBlock in response.content, got {len(tool_call_blocks)}. "
+            f"Content types: {[type(b).__name__ for b in response.content]}"
+        )
+        tcb = tool_call_blocks[0]
+        assert tcb.type == "tool_call", f"ToolCallBlock.type must be 'tool_call', got '{tcb.type}'"
+        assert tcb.id == "tc1", f"ToolCallBlock.id mismatch: {tcb.id}"
+        assert tcb.name == "read_file", f"ToolCallBlock.name mismatch: {tcb.name}"
+        assert tcb.input == {"path": "test.py"}, (
+            f"ToolCallBlock.input mismatch: {tcb.input}. "
+            "Note: ToolCallBlock uses 'input', NOT 'arguments' (that's ToolCall)."
+        )
+
+    def test_tool_calls_field_uses_tool_call_type_not_tool_call_block(self) -> None:
+        """Contract: streaming-contract:StreamingResponse:MUST:2 — tool_calls field
+        MUST contain ToolCall objects (with `arguments` field), not ToolCallBlock.
+
+        ChatResponse.tool_calls: list[ToolCall] | None — this is the kernel's
+        'execute this tool' signal. ToolCall.arguments maps to SDK tool request arguments.
+        """
+        from amplifier_core.message_models import ToolCall
+
+        from amplifier_module_provider_github_copilot.streaming import (
+            DomainEvent,
+            DomainEventType,
+            StreamingAccumulator,
+        )
+
+        accumulator = StreamingAccumulator()
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TOOL_CALL,
+                data={"id": "tc1", "name": "read_file", "arguments": {"path": "test.py"}},
+            )
+        )
+        accumulator.add(
+            DomainEvent(type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "tool_use"})
+        )
+
+        response = accumulator.to_chat_response()
+
+        assert response.tool_calls is not None, "tool_calls must not be None when tools present"
+        assert len(response.tool_calls) == 1
+        tc = response.tool_calls[0]
+        assert isinstance(tc, ToolCall), (
+            f"tool_calls entries must be ToolCall, got {type(tc).__name__}"
+        )
+        assert tc.arguments == {"path": "test.py"}, f"ToolCall.arguments mismatch: {tc.arguments}"
 
 
 # ============================================================================

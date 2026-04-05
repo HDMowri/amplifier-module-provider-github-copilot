@@ -155,9 +155,15 @@ def extract_usage_data(sdk_event: Any) -> dict[str, int] | None:
             input_tokens: Any = typed_data.get("input_tokens")
             output_tokens: Any = typed_data.get("output_tokens")
             if input_tokens is not None or output_tokens is not None:
+                in_tok = int(input_tokens) if input_tokens else 0
+                out_tok = int(output_tokens) if output_tokens else 0
                 return {
-                    "input_tokens": int(input_tokens) if input_tokens else 0,
-                    "output_tokens": int(output_tokens) if output_tokens else 0,
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    # SDK assistant.usage does not send total_tokens — compute it.
+                    # Kernel Usage.total_tokens: int is required (not Optional).
+                    # Contract: streaming-contract:Usage:MUST
+                    "total_tokens": in_tok + out_tok,
                 }
         return None
 
@@ -167,9 +173,15 @@ def extract_usage_data(sdk_event: Any) -> dict[str, int] | None:
         input_tokens = getattr(data, "input_tokens", None)
         output_tokens = getattr(data, "output_tokens", None)
         if input_tokens is not None or output_tokens is not None:
+            in_tok = int(input_tokens) if input_tokens else 0
+            out_tok = int(output_tokens) if output_tokens else 0
             return {
-                "input_tokens": int(input_tokens) if input_tokens else 0,
-                "output_tokens": int(output_tokens) if output_tokens else 0,
+                "input_tokens": in_tok,
+                "output_tokens": out_tok,
+                # SDK assistant.usage does not send total_tokens — compute it.
+                # Kernel Usage.total_tokens: int is required (not Optional).
+                # Contract: streaming-contract:Usage:MUST
+                "total_tokens": in_tok + out_tok,
             }
 
     return None

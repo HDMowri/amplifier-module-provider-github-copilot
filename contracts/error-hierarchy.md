@@ -70,6 +70,11 @@ class LLMError(Exception):
 | `ContentFilterError`, safety | `ContentFilterError` | No |
 | `ConnectionError`, 5xx | `ProviderUnavailableError` | Yes |
 | `ProcessExitedError`, network | `NetworkError` | Yes |
+
+**error-hierarchy:ConnectionError:MUST:1** — SDK `ConnectionError` MUST map to
+`ProviderUnavailableError` (not `NetworkError`). Connection refused indicates the
+SDK subprocess or remote endpoint is unavailable — a provider-level failure, not a
+raw network transport failure. `ProcessExitedError` maps to `NetworkError`.
 | `ModelNotFoundError`, 404 | `NotFoundError` | No |
 | Session errors | `ProviderUnavailableError` | Yes |
 | Circuit breaker | `ProviderUnavailableError` | No |

@@ -389,7 +389,6 @@ class TestSDKImportsRealPath:
                     original_module
                 )
 
-
     def test_permission_request_result_falls_back_to_copilot_session(self) -> None:
         """PermissionRequestResult MUST resolve from copilot.session when copilot.types absent.
 

@@ -278,9 +278,7 @@ class TestTimeoutEnforcement:
             mock_session.on = MagicMock(side_effect=mock_on)
             mock_session.session_id = "test-session-id"
 
-            async def mock_send(
-                prompt: str, attachments: list[Any] | None = None
-            ) -> str:
+            async def mock_send(prompt: str, attachments: list[Any] | None = None) -> str:
                 # send() returns immediately — stall is at idle_event.wait().
                 # This is the exact path that exercises the nested deadline race.
                 # idle_event is never signalled, so asyncio.timeout must fire.
@@ -301,7 +299,7 @@ class TestTimeoutEnforcement:
             await provider.complete(request, _timeout_seconds=0.05)  # type: ignore[arg-type]
 
         # Confirm it is the right subtype — NOT AbortError ("Request cancelled")
-        assert not isinstance(
-            exc_info.value, AbortError
-        ), "Got AbortError instead of LLMTimeoutError — nested timeout race misclassified"
+        assert not isinstance(exc_info.value, AbortError), (
+            "Got AbortError instead of LLMTimeoutError — nested timeout race misclassified"
+        )
         assert exc_info.value.retryable is True, "LLMTimeoutError must be retryable"

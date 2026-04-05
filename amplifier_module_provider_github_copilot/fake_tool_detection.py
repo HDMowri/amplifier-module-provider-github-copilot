@@ -93,7 +93,7 @@ def _load_fake_tool_detection_config_cached(
             )
             config_file = config_files.joinpath("fake-tool-detection.yaml")
             yaml_text = config_file.read_text(encoding="utf-8")
-        except (ModuleNotFoundError, FileNotFoundError, TypeError):
+        except (ModuleNotFoundError, FileNotFoundError, TypeError):  # pragma: no cover
             # Fallback to filesystem path
             fallback_path = Path(__file__).parent / "config" / "fake-tool-detection.yaml"
             if fallback_path.exists():

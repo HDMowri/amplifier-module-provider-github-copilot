@@ -12,7 +12,7 @@ Contract: observability:Payload:SHOULD:2 — Type-safe tool name extraction
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -331,3 +331,72 @@ class TestBuildRequestPayloadToolNameExtraction:
         assert "tool_a" in result["tool_names"]
         assert "tool_b" in result["tool_names"]
         assert "tool_c" in result["tool_names"]
+
+
+# ---------------------------------------------------------------------------
+# _extract_content_block: None block guard (request_adapter.py line ~197)
+# _extract_message_content: None content guard (request_adapter.py line ~164)
+# extract_system_message: empty messages guard (request_adapter.py line ~285)
+# ---------------------------------------------------------------------------
+
+
+class TestNullGuardBranches:
+    """Null/empty guard branches in request_adapter that must be covered.
+
+    Contract: provider-protocol:complete:MUST:1 — content extraction is
+    fault-tolerant. These are real return paths, not dead code.
+    """
+
+    def test_extract_content_block_with_none_returns_empty(self) -> None:
+        """_extract_content_block(None) returns ''.
+
+        Line ~197 in request_adapter.py: `if block is None: return ""`
+        Contract: provider-protocol:complete:MUST:1 — null block guard
+        Caller: _extract_message_content iterates list items; None can appear
+        in a malformed content list from a future kernel version.
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_content_block,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        result = _extract_content_block(None)
+        assert result == "", (
+            "_extract_content_block(None) must return '' not raise. "
+            "Contract: provider-protocol:complete:MUST:1"
+        )
+
+    def test_extract_message_content_with_none_returns_empty(self) -> None:
+        """_extract_message_content(None) returns ''.
+
+        Line ~164 in request_adapter.py: `if content is None: return ""`
+        Contract: provider-protocol:complete:MUST:1 — null content guard
+        A message with content=None is permissible (role-only message).
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _extract_message_content,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        result = _extract_message_content(None)
+        assert result == "", (
+            "_extract_message_content(None) must return '' not raise. "
+            "Contract: provider-protocol:complete:MUST:1"
+        )
+
+    def test_extract_system_message_with_empty_messages_returns_none(self) -> None:
+        """extract_system_message with messages=[] returns None.
+
+        Line ~285 in request_adapter.py: `if not messages: return None`
+        Contract: provider-protocol:complete:MUST:1 — empty request guard
+        The kernel MAY send a request with no messages (edge case in orchestrator).
+        """
+        from amplifier_module_provider_github_copilot.request_adapter import extract_system_message
+
+        @dataclass
+        class EmptyRequest:
+            messages: list[Any] = field(default_factory=list)
+
+        result = extract_system_message(EmptyRequest())
+        assert result is None, (
+            "extract_system_message with empty messages must return None. "
+            "Contract: provider-protocol:complete:MUST:1"
+        )

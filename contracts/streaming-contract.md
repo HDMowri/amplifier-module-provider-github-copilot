@@ -30,14 +30,22 @@ from amplifier_core import (
     TextBlock,
     ThinkingBlock,
     ToolCall,
+    ToolCallBlock,  # For ChatResponse.content
 )
 ```
 
 > **IMPORTANT:** The kernel has TWO content type systems:
 > - `content_models`: TextContent, ThinkingContent (dataclass) — for internal kernel use
-> - `message_models`: TextBlock, ThinkingBlock (Pydantic) — for ChatResponse.content
+> - `message_models`: TextBlock, ThinkingBlock, ToolCallBlock (Pydantic) — for ChatResponse.content
 >
-> Providers MUST use message_models types because ChatResponse.content is typed as `list[TextBlock | ThinkingBlock | RedactedThinkingBlock | ToolCall]`.
+> Providers MUST use message_models types for `ChatResponse.content`, which is typed as
+> `list[ContentBlockUnion]` — a discriminated union on the `type` field (message_models.py:266).
+>
+> **CRITICAL:** `ToolCallBlock` (field: `input: dict`, `type: Literal["tool_call"]`) is the
+> correct type for `content`. `ToolCall` (field: `arguments: dict`) is used ONLY in
+> `ChatResponse.tool_calls: list[ToolCall]`. These are separate fields with different purposes:
+> - `content` — context persistence: what the model said (including tool requests as ToolCallBlock)
+> - `tool_calls` — execution signal: which tools the orchestrator should execute (ToolCall)
 
 ### TextBlock (Pydantic)
 ```python
@@ -58,13 +66,30 @@ class ThinkingBlock(BaseModel):
 
 **Rationale:** Anthropic models send encrypted extended thinking data in `reasoning_opaque` which must be returned verbatim in subsequent turns for multi-turn extended thinking to work. The kernel's `ThinkingBlock.signature` field maps directly to the SDK's `reasoning_opaque`. GPT models do not use this field.
 
-### ToolCall (Pydantic)
+### ToolCallBlock (Pydantic) — for ChatResponse.content
+```python
+class ToolCallBlock(BaseModel):
+    type: Literal["tool_call"] = "tool_call"  # Discriminator for ContentBlockUnion
+    id: str
+    name: str
+    input: dict[str, Any]  # NOTE: field is 'input', not 'arguments'
+```
+
+**streaming-contract:ToolCallBlock:MUST:1**: Provider MUST append a `ToolCallBlock` to
+`ChatResponse.content` for each tool call the model requests. This enables multi-turn
+context reconstruction — the assistant's tool call requests must be visible in `content`
+for downstream consumers that rebuild conversation history from content blocks.
+
+### ToolCall (Pydantic) — for ChatResponse.tool_calls
 ```python
 class ToolCall(BaseModel):
     id: str
     name: str
-    arguments: dict[str, Any]
+    arguments: dict[str, Any]  # NOTE: field is 'arguments', not 'input'
 ```
+
+**Note:** `ToolCall` is NOT in `ContentBlockUnion`. It belongs ONLY in
+`ChatResponse.tool_calls: list[ToolCall]` — the orchestrator's execution signal.
 
 ---
 
@@ -79,8 +104,8 @@ SDK Event Stream
     │   └─→ DROP: Ignore
     │
     └─→ Final ChatResponse
-        ├─→ content: [TextBlock, ThinkingBlock, ToolCall...]
-        ├─→ tool_calls: [ToolCall...]
+        ├─→ content: [TextBlock, ThinkingBlock, ToolCallBlock...]  ← ContentBlockUnion
+        ├─→ tool_calls: [ToolCall...]  ← execution signal
         └─→ usage: {token counts}
 ```
 
@@ -91,11 +116,16 @@ SDK Event Stream
 ### MUST Constraints
 
 1. **MUST** accumulate text deltas in order
-2. **MUST** use kernel message types (`TextBlock`, `ThinkingBlock`, `ToolCall`)
+2. **MUST** use kernel message types (`TextBlock`, `ThinkingBlock`, `ToolCallBlock`) in `content`;
+   `ToolCall` goes ONLY in `tool_calls` — NOT in `content`
 3. **MUST** maintain block boundaries
 4. **MUST** handle out-of-order deltas gracefully
 5. **MUST NOT** lose deltas during accumulation
 6. **MUST NOT** define custom content types
+
+**streaming-contract:Accumulation:MUST:3**: Empty text deltas (text == "") MUST NOT be added to `_ordered_blocks`. The GitHub Copilot SDK interleaves empty `assistant.streaming_delta` events between consecutive `assistant.reasoning_delta` (thinking) events. Without this guard, each empty text creates a text-type block entry that fragments thinking consolidation — producing one `ThinkingContent` in `content_blocks` per thinking token (up to 47 fragmented thinking boxes in production).
+
+**Rationale:** The loop-streaming orchestrator emits one `content_block:start` + `content_block:end` pair per entry in `response.content_blocks`. If `content_blocks` has 47 `ThinkingContent` entries (one per reasoning delta token), the CLI renders 47 `🧠 Thinking...` boxes. The fix: only append to `_ordered_blocks` when `text` is non-empty, so consecutive thinking deltas consolidate into one block.
 
 ### Accumulator State
 
@@ -191,6 +221,10 @@ For real-time UI updates, the provider SHOULD emit `llm:content_block` events as
 **SHOULD-3:** Provider SHOULD track pending emit tasks and clean up on provider close.
 
 **SHOULD-4:** Provider SHOULD gracefully skip emission when no coordinator or no hooks available.
+
+**SHOULD-5:** Provider SHOULD NOT emit thinking deltas progressively per-token. Per-token `ThinkingContent` emission causes the CLI to render one thinking box per streaming chunk (hundreds of micro-boxes). Thinking emission granularity is controlled by `streaming_emission.thinking_content_types` in `events.yaml`. Setting this to an empty list suppresses per-delta thinking emission; the full consolidated `ThinkingContent` block is still present in the final `StreamingChatResponse.content_blocks`.
+
+**Rationale for SHOULD-5:** The Amplifier CLI renders each `llm:content_block` hook event as a discrete UI element. Text deltas are appended inline; thinking blocks are rendered as separate collapsible boxes. Emitting one `ThinkingContent` per token produces hundreds of identical empty boxes during a thinking phase.
 
 ### Event Schema
 
@@ -375,6 +409,8 @@ class StreamingChatResponse(ChatResponse):
 | `streaming-contract:ProgressiveStreaming:SHOULD:2` | Async fire-and-forget emission |
 | `streaming-contract:ProgressiveStreaming:SHOULD:3` | Track and clean up emit tasks |
 | `streaming-contract:ProgressiveStreaming:SHOULD:4` | Graceful skip when no coordinator |
+| `streaming-contract:ProgressiveStreaming:SHOULD:5` | Do not emit thinking deltas per-token; control via events.yaml |
+| `streaming-contract:Accumulation:MUST:3` | Empty text deltas MUST NOT disrupt thinking block consolidation |
 
 ---
 
