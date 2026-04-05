@@ -260,11 +260,15 @@ class TestF035EdgeCases:
         assert result.__class__.__name__ == "LLMTimeoutError"
         assert result.retryable is True
 
-    def test_generic_connection_error_maps_to_network_error(
+    def test_generic_connection_error_maps_to_provider_unavailable_error(
         self, error_config: ErrorConfig, translate_fn: Callable[..., LLMError]
     ) -> None:
-        """Edge - Generic 'connection error' maps to NetworkError."""
+        """Edge - Generic 'connection error' message maps to ProviderUnavailableError.
+
+        Contract: error-hierarchy:ConnectionError:MUST:1 — connection failures
+        indicate the provider endpoint is unreachable, not a transient network event.
+        """
         exc = Exception("connection error occurred")
         result = translate_fn(exc, error_config)
-        assert result.__class__.__name__ == "NetworkError"
+        assert result.__class__.__name__ == "ProviderUnavailableError"
         assert result.retryable is True

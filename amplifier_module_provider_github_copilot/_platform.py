@@ -91,7 +91,7 @@ def get_platform_info() -> PlatformInfo:
         try:
             with open("/proc/version", encoding="utf-8") as f:
                 is_wsl = "microsoft" in f.read().lower()
-        except OSError:
+        except OSError:  # pragma: no cover — only when /proc/version absent (non-Linux, containers)
             pass  # /proc/version not present on non-Linux or in some containers
         return PlatformInfo(
             name="Unix",

@@ -910,10 +910,11 @@ class TestFakeToolDetectionRetry:
         with caplog.at_level(logging.DEBUG):
             # P1 Fix: Now raises translated kernel error instead of raw exception.
             # Contract: error-hierarchy.md — SDK errors MUST be translated.
-            # ConnectionError → NetworkError per errors.yaml
-            from amplifier_core.llm_errors import NetworkError
+            # Contract: error-hierarchy:ConnectionError:MUST:1
+            # ConnectionError → ProviderUnavailableError (provider endpoint unreachable)
+            from amplifier_core.llm_errors import ProviderUnavailableError
 
-            with pytest.raises(NetworkError, match="Network error during correction"):
+            with pytest.raises(ProviderUnavailableError, match="Network error during correction"):
                 await provider.complete(request)
 
         # Should have attempted correction (2 attempts: original + retry)

@@ -22,11 +22,13 @@ class ThinkingBlock:
 
 
 class ToolCallBlock:
-    """Tool call block in a message."""
-    type: str
+    """Tool call block in a message (ContentBlockUnion member)."""
+    type: str  # Literal["tool_call"] discriminator
     id: str
     name: str
-    arguments: str | dict[str, Any]
+    input: dict[str, Any]  # NOTE: 'input', not 'arguments' (that's ToolCall)
+
+    def __init__(self, *, type: str = "tool_call", id: str, name: str, input: dict[str, Any], **kwargs: Any) -> None: ...
 
 
 class ToolSpec:
@@ -44,9 +46,22 @@ class ToolSpec:
     ) -> None: ...
 
 
+class ToolCall:
+    """Tool call object (goes in ChatResponse.tool_calls, NOT in content).
+
+    NOTE: Field is 'arguments', NOT 'input'. ToolCallBlock has 'input'.
+    """
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+    def __init__(self, *, id: str, name: str, arguments: dict[str, Any], **kwargs: Any) -> None: ...
+
+
 __all__ = [
     "TextBlock",
     "ThinkingBlock", 
     "ToolCallBlock",
+    "ToolCall",
     "ToolSpec",
 ]

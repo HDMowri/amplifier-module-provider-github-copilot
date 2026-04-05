@@ -13,12 +13,33 @@ Separation of Concerns:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, cast
 
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import CompletionRequest, extract_attachments_from_chat_request
 
 logger = logging.getLogger(__name__)
+
+# Pattern matching synthetic role-marker format in user-controlled content.
+# Matches [WORD] where WORD is 2+ uppercase letters/underscores.
+# Contract: behaviors:Security:MUST:1 — OWASP A03: Injection prevention
+_ROLE_INJECTION_PATTERN = re.compile(r"\[([A-Z][A-Z_]{1,})\]")
+
+
+def _sanitize_content_for_injection(text: str) -> str:
+    """Escape role-marker sequences in user-controlled text.
+
+    Prevents prompt injection via synthetic role delimiters such as
+    [USER], [ASSISTANT], [SYSTEM]. Escapes [WORD] → \\[WORD\\] so
+    the LLM does not interpret the sequence as a role boundary.
+
+    Content is preserved — only the brackets are escaped.
+
+    Contract: behaviors:Security:MUST:1
+    """
+    return _ROLE_INJECTION_PATTERN.sub(r"\\[\1\\]", text)
+
 
 __all__ = [
     "convert_chat_request",
@@ -145,7 +166,7 @@ def _extract_message_content(content: Any) -> str:
 
     # String content
     if isinstance(content, str):
-        return content
+        return _sanitize_content_for_injection(content)
 
     # List of content blocks
     if isinstance(content, list):
@@ -194,13 +215,17 @@ def _extract_content_block(block: Any) -> str:
     if block_type == "thinking" or (block_type is None and hasattr(block, "thinking")):
         thinking: str | None = getattr(block, "thinking", None) or _get("thinking")
         if thinking:
-            return f"[Thinking: {thinking}]"
+            # Contract: behaviors:Security:MUST:1 — sanitize thinking content
+            # Thinking blocks are in scope: adversarial tool results can cause the model
+            # to echo role markers in reasoning, which embeds them in subsequent prompt turns.
+            return f"[Thinking: {_sanitize_content_for_injection(str(thinking))}]"
         return ""
 
     # TextContent - extract text attribute
     if block_type == "text" or (block_type is None and hasattr(block, "text")):
         text: str | None = getattr(block, "text", None) or _get("text")
-        return str(text) if text else ""
+        # Contract: behaviors:Security:MUST:1 — sanitize user content
+        return _sanitize_content_for_injection(str(text)) if text else ""
 
     # Skip ToolCallContent blocks entirely — they are handled via tool_calls field.
     # This prevents fake tool call detection from triggering on prior turns.
@@ -216,9 +241,14 @@ def _extract_content_block(block: Any) -> str:
             tool_result_call_id: str | None = getattr(block, "tool_call_id", None) or _get(
                 "tool_call_id"
             )
+            # Contract: behaviors:Security:MUST:1 — sanitize tool result output
+            # Tool results are user-controlled (external service response).
+            # Indirect injection: malicious service returns [ROLE_MARKER] sequences
+            # which, unescaped, inject fake role boundaries into the prompt.
+            sanitized_output = _sanitize_content_for_injection(str(output))
             if tool_result_call_id:
-                return f"[Tool Result (id={tool_result_call_id}): {output}]"
-            return f"[Tool Result: {output}]"
+                return f"[Tool Result (id={tool_result_call_id}): {sanitized_output}]"
+            return f"[Tool Result: {sanitized_output}]"
         return ""
 
     # Fallback - try common text attributes

@@ -102,6 +102,20 @@ class ToolCall:
     arguments: str | dict[str, Any]
 
 
+class ToolCallBlock:
+    """Tool call block for ChatResponse.content (ContentBlockUnion member, Pydantic BaseModel).
+
+    NOTE: Field is 'input', NOT 'arguments'. ToolCall has 'arguments'.
+    These are two separate types with different field names and different purposes.
+    """
+    type: str  # Literal["tool_call"] discriminator
+    id: str
+    name: str
+    input: dict[str, Any]
+
+    def __init__(self, *, type: str = "tool_call", id: str, name: str, input: dict[str, Any], **kwargs: Any) -> None: ...
+
+
 class TextBlock:
     """Text block for Pydantic context persistence (Pydantic BaseModel)."""
     type: str
@@ -175,6 +189,7 @@ __all__ = [
     "ChatRequest",
     "ChatResponse",
     "ToolCall",
+    "ToolCallBlock",
     "TextBlock",
     "ThinkingBlock",
     "Usage",

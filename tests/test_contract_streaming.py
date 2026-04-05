@@ -561,6 +561,165 @@ class TestEventRouterErrorHandling:
         assert queue.empty(), "error events must NOT be queued — critical path only"
 
 
+class TestThinkingDeltaNotEmittedPerToken:
+    """streaming-contract:ProgressiveStreaming:SHOULD:5
+
+    Thinking deltas MUST NOT be emitted per-token as separate ThinkingContent objects.
+    Per-token emission causes the CLI to render one 🧠 box per streaming chunk.
+    Granularity is controlled by events.yaml thinking_content_types.
+    """
+
+    def test_thinking_content_types_empty_in_events_yaml(self) -> None:
+        """streaming-contract:ProgressiveStreaming:SHOULD:5.
+
+        events.yaml must suppress per-token thinking emission.
+        The events.yaml streaming_emission.thinking_content_types MUST be empty
+        so that EventRouter._emit_progressive_content never emits ThinkingContent
+        per delta. Verified by loading real EventConfig from events.yaml.
+        """
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        event_config = load_event_config()
+
+        assert event_config.thinking_content_types == set(), (
+            "streaming_emission.thinking_content_types must be empty in events.yaml "
+            "to prevent per-token ThinkingContent emission (SHOULD:5). "
+            f"Got: {event_config.thinking_content_types}"
+        )
+
+    def test_thinking_delta_does_not_trigger_emit_callback(self) -> None:
+        """streaming-contract:ProgressiveStreaming:SHOULD:5 — reasoning delta must not call emit.
+
+        When EventRouter receives an assistant.reasoning_delta event and
+        thinking_content_types is empty (per events.yaml policy), the
+        emit_streaming_content callback MUST NOT be called.
+        """
+        import asyncio
+
+        from amplifier_module_provider_github_copilot.event_router import EventRouter
+        from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
+            ToolCaptureHandler,
+        )
+        from amplifier_module_provider_github_copilot.streaming import load_event_config
+
+        emitted: list[Any] = []
+        event_config = load_event_config()  # real config — thinking_content_types must be empty
+
+        router = EventRouter(
+            queue=asyncio.Queue(maxsize=256),
+            idle_event=asyncio.Event(),
+            error_holder=[],
+            usage_holder=[],
+            capture_handler=ToolCaptureHandler(on_capture_complete=None),
+            ttft_state={"checked": False, "start_time": 0.0},
+            ttft_threshold_ms=500,
+            event_config=event_config,
+            emit_streaming_content=emitted.append,
+        )
+
+        # Simulate a reasoning delta — the per-token thinking chunk the SDK sends
+        reasoning_event: dict[str, Any] = {
+            "type": "assistant.reasoning_delta",
+            "data": {"delta_content": "The"},
+        }
+        router(reasoning_event)
+
+        assert emitted == [], (
+            "emit_streaming_content must NOT be called for reasoning deltas "
+            "when thinking_content_types is empty (SHOULD:5). "
+            f"Got {len(emitted)} emission(s)."
+        )
+
+
+class TestThinkingBlockConsolidation:
+    """streaming-contract:Accumulation:MUST:3
+
+    Empty text deltas interleaved with reasoning deltas MUST NOT produce
+    fragmented thinking blocks. The GitHub Copilot SDK emits empty
+    assistant.streaming_delta events between each assistant.reasoning_delta.
+    Without the guard, each empty text creates a separate text-type entry
+    in _ordered_blocks, causing one ThinkingContent per token in content_blocks.
+    """
+
+    def test_empty_text_deltas_do_not_fragment_thinking_blocks(self) -> None:
+        """streaming-contract:Accumulation:MUST:3 — empty text events must not fragment thinking.
+
+        Simulates the SDK pattern: assistant.streaming_delta (empty) interleaved
+        with assistant.reasoning_delta events. The accumulator MUST consolidate all
+        reasoning tokens into a single thinking block in _ordered_blocks.
+        """
+        accumulator = StreamingAccumulator()
+
+        T = "TEXT"
+        K = "THINKING"
+        CD = DomainEventType.CONTENT_DELTA
+        # Simulate the SDK pattern: empty streaming_delta before each reasoning_delta
+        events = [
+            DomainEvent(type=CD, data={"text": ""}, block_type=T),
+            DomainEvent(type=CD, data={"text": "The"}, block_type=K),
+            DomainEvent(type=CD, data={"text": ""}, block_type=T),
+            DomainEvent(type=CD, data={"text": " user wants"}, block_type=K),
+            DomainEvent(type=CD, data={"text": ""}, block_type=T),
+            DomainEvent(type=CD, data={"text": " to know"}, block_type=K),
+            DomainEvent(type=CD, data={"text": "Answer"}, block_type=T),
+        ]
+        for event in events:
+            accumulator.add(event)
+
+        # Must have exactly 2 blocks: 1 thinking + 1 text (in that order)
+        block_types = [b["type"] for b in accumulator._ordered_blocks]
+        assert block_types == ["thinking", "text"], (
+            f"streaming-contract:Accumulation:MUST:3 — empty text deltas between "
+            f"reasoning deltas must not fragment thinking blocks. "
+            f"Expected ['thinking', 'text'], got {block_types}"
+        )
+
+        # The single thinking block must have all reasoning token text concatenated
+        thinking_block = accumulator._ordered_blocks[0]
+        assert thinking_block["text"] == "The user wants to know", (
+            f"All reasoning tokens must be concatenated. Got: {thinking_block['text']!r}"
+        )
+
+    def test_content_blocks_has_single_thinking_block_despite_interleaving(self) -> None:
+        """streaming-contract:Accumulation:MUST:3 — to_chat_response produces one ThinkingContent.
+
+        The loop-streaming orchestrator emits one content_block:start/end pair per
+        content_blocks entry. A single ThinkingContent means ONE 🧠 box.
+        """
+        from amplifier_core import ThinkingContent
+
+        accumulator = StreamingAccumulator()
+        CD = DomainEventType.CONTENT_DELTA
+
+        # 3 reasoning tokens with empty text events between them (SDK pattern)
+        for i in range(3):
+            accumulator.add(
+                DomainEvent(type=CD, data={"text": ""}, block_type="TEXT")
+            )
+            accumulator.add(
+                DomainEvent(type=CD, data={"text": f"token{i}"}, block_type="THINKING")
+            )
+
+        accumulator.add(
+            DomainEvent(
+                type=DomainEventType.TURN_COMPLETE, data={"finish_reason": "stop"}
+            )
+        )
+
+        response = accumulator.to_chat_response()
+
+        assert response.content_blocks is not None
+        thinking_blocks = [
+            b for b in response.content_blocks if isinstance(b, ThinkingContent)
+        ]
+        assert len(thinking_blocks) == 1, (
+            f"streaming-contract:Accumulation:MUST:3 — must produce ONE ThinkingContent "
+            f"in content_blocks regardless of SDK interleaving. "
+            f"Got {len(thinking_blocks)}."
+        )
+        assert thinking_blocks[0].text == "token0token1token2"
+
+
 # ---------------------------------------------------------------------------
 # to_chat_response() kernel output layer tests
 # Contract: streaming-contract:StreamingResponse:MUST:1-4

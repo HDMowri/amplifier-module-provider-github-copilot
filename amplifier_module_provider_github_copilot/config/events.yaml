@@ -18,8 +18,11 @@ streaming_emission:
   text_content_types:
     - assistant.message_delta
     - assistant.streaming_delta
-  thinking_content_types:
-    - assistant.reasoning_delta
+  # thinking_content_types is intentionally empty: per-token ThinkingContent emission suppressed.
+  # Per-delta emission renders one 🧠 box per streaming chunk in the CLI.
+  # Full consolidated ThinkingContent is present in StreamingChatResponse.content_blocks.
+  # Contract: streaming-contract:ProgressiveStreaming:SHOULD:5
+  thinking_content_types: []
 
 event_classifications:
   bridge:
@@ -89,8 +92,9 @@ event_classifications:
     - session.resume
     - session.task_complete
     - hook.*
-    - elicitation.*
-    - command.*
+    - elicitation.*  # SDK v0.2.1: elicitation dialogs, provider-initiated UI — not our concern
+    - command.*      # SDK v0.2.1: slash command dispatch — provider does not handle commands
+    - capabilities.changed  # SDK v0.2.1: CLI host capability changes — no domain action
     - subagent.*
     - skill.*
     - user.*

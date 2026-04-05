@@ -133,6 +133,10 @@ class StreamingAccumulator:
     # SDK subprocess PID for log file correlation (~/.copilot/logs/process-*-{pid}.log)
     # Contract: observability:Events:SHOULD:3
     sdk_pid: str | None = None
+    # Ordered block sequence for content ordering preservation.
+    # Each entry: {"type": "text"|"thinking"|"tool_call", ...data}
+    # Contract: streaming-contract:StreamingResponse:MUST:2 (P1-3 fix)
+    _ordered_blocks: list[dict[str, Any]] = field(default_factory=lambda: [])
 
     @property
     def text_content(self) -> str:
@@ -166,14 +170,39 @@ class StreamingAccumulator:
                 # Contract: streaming-contract:ThinkingBlock:MUST:1
                 if event.data.get("reasoning_opaque"):
                     self.reasoning_opaque = event.data["reasoning_opaque"]
+                # Track ordered: extend last thinking block or start new one
+                if self._ordered_blocks and self._ordered_blocks[-1]["type"] == "thinking":
+                    self._ordered_blocks[-1]["text"] += text
+                    if event.data.get("reasoning_opaque"):
+                        self._ordered_blocks[-1]["opaque"] = event.data["reasoning_opaque"]
+                else:
+                    self._ordered_blocks.append(
+                        {
+                            "type": "thinking",
+                            "text": text,
+                            "opaque": event.data.get("reasoning_opaque"),
+                        }
+                    )
             else:
                 self._text_blocks[-1] += text
+                # Track ordered: extend last text block or start new one
+                # Only track non-empty text to preserve thinking block consolidation.
+                # Empty text deltas (e.g. assistant.message_delta with empty delta_content)
+                # must not create empty text entries that break consecutive thinking consolidation.
+                # Contract: streaming-contract:StreamingResponse:MUST:2
+                if text:
+                    if self._ordered_blocks and self._ordered_blocks[-1]["type"] == "text":
+                        self._ordered_blocks[-1]["text"] += text
+                    else:
+                        self._ordered_blocks.append({"type": "text", "text": text})
         elif event.type == DomainEventType.TOOL_CALL:
             self.tool_calls.append(event.data)
             # H-4: Start a new text block after a tool call so that any
             # post-tool text lands in a separate TextBlock.
             # Contract: streaming-contract:Accumulation:MUST:2
             self._text_blocks.append("")
+            # Track ordered: tool_call is a block in insertion order
+            self._ordered_blocks.append({"type": "tool_call", "data": event.data})
         elif event.type == DomainEventType.TURN_COMPLETE:
             self.finish_reason = event.data.get("finish_reason", "stop")
             self.is_complete = True
@@ -213,6 +242,7 @@ class StreamingAccumulator:
             TextBlock,
             ThinkingBlock,
             ToolCall,
+            ToolCallBlock,
             ToolCallContent,
             Usage,
         )
@@ -220,54 +250,60 @@ class StreamingAccumulator:
         # Build content list (Pydantic types for context persistence)
         # Narrowed to actual kernel types — eliminates arg-type suppression at StreamingChatResponse
         # Contract: streaming-contract:StreamingResponse:MUST:3
-        content: list[TextBlock | ThinkingBlock | ToolCall] = []
+        # ToolCallBlock (not ToolCall) is the ContentBlockUnion member for tool calls in content.
+        # ToolCall goes in tool_calls; ToolCallBlock goes in content.
+        # streaming-contract:ToolCallBlock:MUST:1
+        # P1-3 fix: iterate _ordered_blocks to preserve block arrival order.
+        # streaming-contract:StreamingResponse:MUST:2
+        content: list[TextBlock | ThinkingBlock | ToolCallBlock] = []
         # Build content_blocks list (dataclass types for streaming UI)
         content_blocks: list[TextContent | ThinkingContent | ToolCallContent] = []
-
-        # Add text content using both type systems — one TextBlock per block
-        # H-4: streaming-contract:Accumulation:MUST:2 — preserve block boundaries
-        for block_text in self._text_blocks:
-            if block_text:
-                content.append(TextBlock(text=block_text))
-                content_blocks.append(TextContent(text=block_text))
-
-        # Add thinking content using both type systems
-        if self.thinking_content:
-            # Contract: streaming-contract:ThinkingBlock:MUST:1
-            # Pass reasoning_opaque as signature for multi-turn extended thinking
-            content.append(
-                ThinkingBlock(
-                    thinking=self.thinking_content,
-                    signature=self.reasoning_opaque,
-                )
-            )
-            content_blocks.append(ThinkingContent(text=self.thinking_content))
-
-        # Convert tool calls to kernel ToolCall and ToolCallContent
+        # tool_calls list built from ordered_blocks tool_call entries
         tool_calls: list[Any] | None = None
-        if self.tool_calls:
-            tool_calls = []
-            for tc in self.tool_calls:
-                # Generate ID once — shared across ToolCall and ToolCallContent
+        _tool_calls_list: list[Any] = []
+
+        for block in self._ordered_blocks:
+            btype = block["type"]
+            if btype == "text":
+                block_text: str = block["text"]
+                if block_text:
+                    content.append(TextBlock(text=block_text))
+                    content_blocks.append(TextContent(text=block_text))
+            elif btype == "thinking":
+                thinking_text: str = block["text"]
+                if thinking_text:
+                    # Contract: streaming-contract:ThinkingBlock:MUST:1
+                    content.append(
+                        ThinkingBlock(
+                            thinking=thinking_text,
+                            signature=block.get("opaque") or self.reasoning_opaque,
+                        )
+                    )
+                    content_blocks.append(ThinkingContent(text=thinking_text))
+            elif btype == "tool_call":
+                tc = block["data"]
                 tool_call_id = tc.get("id", "") or str(uuid.uuid4())
                 tc_name = tc.get("name", "")
                 tc_args: dict[str, Any] = (
                     tc.get("arguments", {}) if isinstance(tc.get("arguments"), dict) else {}
                 )
-                tool_call = ToolCall(
-                    id=tool_call_id,
-                    name=tc_name,
-                    arguments=tc_args,
-                )
-                tool_calls.append(tool_call)
-                # Also add to content_blocks for streaming UI
+                # ToolCallBlock in content (ContentBlockUnion member); field is `input`
+                # Contract: streaming-contract:ToolCallBlock:MUST:1
+                content.append(ToolCallBlock(id=tool_call_id, name=tc_name, input=tc_args))
+                _tool_calls_list.append(ToolCall(id=tool_call_id, name=tc_name, arguments=tc_args))
                 content_blocks.append(
-                    ToolCallContent(
-                        id=tool_call_id,
-                        name=tc_name,
-                        arguments=tc_args,
-                    )
+                    ToolCallContent(id=tool_call_id, name=tc_name, arguments=tc_args)
                 )
+
+        if _tool_calls_list:
+            tool_calls = _tool_calls_list
+
+        # NOTE: _ordered_blocks is the SOLE source of truth for to_chat_response().
+        # All content, thinking, and tool_call blocks are added to _ordered_blocks
+        # exclusively via add(). Direct field mutation of _text_blocks/thinking_content/
+        # tool_calls bypasses _ordered_blocks and will produce empty content — that is
+        # correct behaviour since direct mutation violates the accumulator contract.
+        # streaming-contract:StreamingResponse:MUST:2
 
         # Convert usage - all three fields REQUIRED
         usage: Any | None = None

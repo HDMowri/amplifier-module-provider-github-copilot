@@ -161,3 +161,96 @@ class TestRaceConditionFix:
 # =============================================================================
 # TestDoubleExceptionTranslation removed - migrated to test_behaviors.py
 # TestProductionPathWithMockClient::test_llm_error_not_double_wrapped (Issue #6)
+
+
+# =============================================================================
+# behaviors:Security:MUST:2 — Mount traceback redacted before DEBUG log
+# =============================================================================
+
+
+class TestMountTracebackRedaction:
+    """Mount failure tracebacks MUST be redacted before DEBUG log emission.
+
+    Contract: behaviors:Security:MUST:2
+
+    Raw exc_info=True bypasses security_redaction.py and may emit tokens
+    present in exception messages or traceback frame local variables.
+    """
+
+    def test_mount_debug_log_does_not_use_raw_exc_info(self) -> None:
+        """behaviors:Security:MUST:2 — mount() MUST NOT call logger.debug with exc_info=True.
+
+        Structural check: inspect the mount() source to ensure raw exc_info=True
+        is not passed to logger.debug in the exception handler. The formatted
+        traceback string must be piped through redact_sensitive_text() first.
+        """
+        import inspect
+
+        import amplifier_module_provider_github_copilot as pkg
+
+        source = inspect.getsource(pkg.mount)
+
+        # Verify the fix is present: formatted traceback must use redact_sensitive_text
+        # Raw exc_info logging would bypass redaction entirely.
+        assert "redact_sensitive_text(formatted_tb)" in source, (
+            "mount() must format traceback to string and pipe through redact_sensitive_text(). "
+            "Contract: behaviors:Security:MUST:2"
+        )
+        assert "format_exception" in source, (
+            "mount() must use traceback.format_exception() to produce a redactable string. "
+            "Contract: behaviors:Security:MUST:2"
+        )
+
+    def test_mount_debug_log_redacts_token_in_traceback(self) -> None:
+        """behaviors:Security:MUST:2 — A token in the exception chain MUST NOT
+        appear in DEBUG log output after redaction.
+        """
+        import logging
+
+        from amplifier_module_provider_github_copilot.security_redaction import REDACTED
+
+        # Capture DEBUG log records
+        captured: list[str] = []
+
+        class CapturingHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(self.format(record))
+
+        handler = CapturingHandler()
+        logger = logging.getLogger("amplifier_module_provider_github_copilot")
+        original_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+
+        # Inject a token into the exception that will appear in the traceback
+        fake_token = "ghp_" + "A" * 25  # Matches GitHub PAT pattern
+
+        try:
+            # Simulate what mount() does on failure — call the error-logging path
+            # by examining the source and triggering the redacted debug log
+            try:
+                raise RuntimeError(f"SDK failed: token={fake_token}")
+            except Exception as e:
+                import traceback as tb_module
+
+                from amplifier_module_provider_github_copilot.security_redaction import (
+                    redact_sensitive_text,
+                )
+
+                formatted = "".join(tb_module.format_exception(type(e), e, e.__traceback__))
+                redacted = redact_sensitive_text(formatted)
+                logger.debug("[MOUNT] Mount failure traceback:\n%s", redacted)
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(original_level)
+
+        # The token must NOT appear in any captured log line
+        for line in captured:
+            assert fake_token not in line, (
+                f"Token {fake_token!r} leaked in DEBUG log. "
+                f"Contract: behaviors:Security:MUST:2. Line: {line!r}"
+            )
+        # REDACTED placeholder must appear instead
+        assert any(REDACTED in line for line in captured), (
+            f"Expected REDACTED in debug log output but found none. Captured: {captured}"
+        )

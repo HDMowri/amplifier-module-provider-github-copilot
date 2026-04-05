@@ -1,9 +1,11 @@
 # Contract: Error Hierarchy
 
 ## Version
-- **Current:** 1.1 (v2.2 Path-Corrected)
-- **Module Reference:** amplifier_module_provider_github_copilot/error_translation.py
-- **Correction:** 2026-03-15 — Removed erroneous `src/` prefix
+- **Current:** 1.2
+- **Module Reference:** amplifier_module_provider_github_copilot/error_translation.py, provider.py
+- **History:**
+  - 1.1 (2026-03-15) — Removed erroneous `src/` prefix
+  - 1.2 (2026-04-04) — Added AbortError:MUST:2 (asyncio.timeout expiry must not produce AbortError)
 - **Config:** amplifier_module_provider_github_copilot/config/errors.yaml
 - **Kernel Source:** `amplifier_core.llm_errors`
 - **Status:** Specification
@@ -68,6 +70,11 @@ class LLMError(Exception):
 | `ContentFilterError`, safety | `ContentFilterError` | No |
 | `ConnectionError`, 5xx | `ProviderUnavailableError` | Yes |
 | `ProcessExitedError`, network | `NetworkError` | Yes |
+
+**error-hierarchy:ConnectionError:MUST:1** — SDK `ConnectionError` MUST map to
+`ProviderUnavailableError` (not `NetworkError`). Connection refused indicates the
+SDK subprocess or remote endpoint is unavailable — a provider-level failure, not a
+raw network transport failure. `ProcessExitedError` maps to `NetworkError`.
 | `ModelNotFoundError`, 404 | `NotFoundError` | No |
 | Session errors | `ProviderUnavailableError` | Yes |
 | Circuit breaker | `ProviderUnavailableError` | No |
@@ -185,7 +192,9 @@ def translate_sdk_error(
 
 ## AbortError Translation
 
-SDK `AbortError`, `CancelledError`, or exceptions with message patterns matching `abort`, `cancelled`, `canceled`, `user interrupt`, or `keyboard interrupt` MUST translate to kernel `AbortError(retryable=False)`.
+**MUST:1** — SDK `AbortError`, `CancelledError`, or exceptions with message patterns matching `abort`, `cancelled`, `canceled`, `user interrupt`, or `keyboard interrupt` MUST translate to kernel `AbortError(retryable=False)`.
+
+**MUST:2** — `CancelledError` arising from `asyncio.timeout` deadline expiry inside `_execute_sdk_completion` MUST NOT translate to `AbortError`. The `asyncio.timeout` context manager MUST hold sole cancellation ownership during `idle_event.wait()`; no nested `asyncio.wait_for` with the same deadline MAY be present. Duplicating the deadline splits cancel ownership and can prevent `asyncio.timeout.__aexit__` from converting `CancelledError` to `TimeoutError`, causing the C-2 guard to misclassify an internal timeout as `AbortError(retryable=False)` instead of `LLMTimeoutError(retryable=True)`. The outer `asyncio.timeout` is the sole deadline enforcement mechanism for the idle wait.
 
 ---
 
@@ -248,6 +257,7 @@ Both paths MUST:
 | Anchor | Clause |
 |--------|--------|
 | `error-hierarchy:AbortError:MUST:1` | User abort produces non-retryable AbortError |
+| `error-hierarchy:AbortError:MUST:2` | asyncio.timeout expiry must not produce AbortError — outer timeout holds sole ownership |}
 
 ### SessionLifecycle
 

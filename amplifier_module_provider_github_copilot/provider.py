@@ -547,7 +547,7 @@ class GitHubCopilotProvider:
             # DEBUG: Log response details before returning to orchestrator
             logger.debug(
                 "[COMPLETE] Returning response: finish_reason=%s, tool_calls=%d, "
-                "content_blocks=%d, text_len=%d",
+                "content=%d, text_len=%d",
                 response.finish_reason,
                 response_tool_calls,
                 len(response.content) if response.content else 0,
@@ -689,10 +689,18 @@ class GitHubCopilotProvider:
                     logger.debug("[SDK_COMPLETION] Sending prompt to SDK session...")
                     await sdk_session.send(prompt, attachments=attachments)
                     logger.debug("[SDK_COMPLETION] Prompt sent, waiting for idle_event...")
-                    # Use caller's timeout for idle wait - SDK API calls can take 60+ seconds
-                    # for complex operations like delegation. The sdk_protection idle_timeout
-                    # is too short (30s) and caused LLMTimeoutError regression.
-                    await asyncio.wait_for(idle_event.wait(), timeout=timeout)
+                    # Await idle_event directly — deadline is enforced by the enclosing
+                    # async with asyncio.timeout(timeout): above.
+                    # Contract: error-hierarchy:AbortError:MUST:2
+                    # MUST NOT use asyncio.wait_for with the same deadline here.
+                    # Duplicating the deadline splits cancel ownership: when both timeouts
+                    # fire at the same absolute time, asyncio.timeout.__aexit__ may not
+                    # hold sole ownership of the CancelledError and falls back to
+                    # re-raising it, causing the C-2 guard to misclassify a server timeout
+                    # as AbortError("Request cancelled") instead of LLMTimeoutError.
+                    # The outer asyncio.timeout is the sole deadline mechanism for all
+                    # awaits within _execute_sdk_completion, including this one.
+                    await idle_event.wait()
                     logger.debug("[SDK_COMPLETION] idle_event received, draining queue...")
 
                     if error_holder:

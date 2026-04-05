@@ -579,3 +579,49 @@ class TestUsageEventHelpers:
         assert result2 is not None
         assert result2["input_tokens"] == 0  # Defaults to 0
         assert result2["output_tokens"] == 50
+
+    def test_extract_usage_data_computes_total_tokens_from_dict_event(self) -> None:
+        """Contract: streaming-contract:Usage:MUST — extract_usage_data MUST include
+        total_tokens computed as input_tokens + output_tokens.
+
+        The SDK assistant.usage event (session_events.py:874-877) sends only
+        inputTokens and outputTokens — no totalTokens field. However, the kernel
+        Usage model requires total_tokens: int (message_models.py:241, not Optional).
+        Provider MUST compute total_tokens = input_tokens + output_tokens.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        event = {"data": {"input_tokens": 100, "output_tokens": 50}}
+        result = extract_usage_data(event)
+        assert result is not None
+        assert "total_tokens" in result, "total_tokens must be present in result"
+        assert result["total_tokens"] == 150, (
+            f"total_tokens should be input+output=150, got {result.get('total_tokens')}"
+        )
+
+    def test_extract_usage_data_computes_total_tokens_from_object_event(self) -> None:
+        """Contract: streaming-contract:Usage:MUST — object-path also computes total_tokens.
+
+        Real SDK sends Usage object without total_tokens attribute; provider
+        must compute it to satisfy kernel Usage.total_tokens: int requirement.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        class MockData:
+            input_tokens = 200
+            output_tokens = 75
+            # Deliberately no total_tokens — mirrors real SDK Usage object
+
+        class MockEvent:
+            data = MockData()
+
+        result = extract_usage_data(MockEvent())
+        assert result is not None
+        assert "total_tokens" in result, "total_tokens must be present in result"
+        assert result["total_tokens"] == 275, (
+            f"total_tokens should be input+output=275, got {result.get('total_tokens')}"
+        )

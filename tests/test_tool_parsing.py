@@ -810,3 +810,125 @@ patterns:
 
         # Clean up cache for other tests
         _load_fake_tool_detection_config_cached.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+
+class TestFakeToolConfigLoadingFallbacks:
+    """Fallback branches in fake_tool_detection config loading.
+
+    Contract: behaviors:Config:MUST:1 — config loading must be fault-tolerant.
+    These test paths for non-existent files, empty-but-parseable YAML,
+    all-invalid-patterns, and the log_retry correction message branch.
+    """
+
+    def test_config_with_nonexistent_path_uses_defaults(self) -> None:
+        """Path provided but file missing returns defaults.
+
+        Line ~108-112 in fake_tool_detection.py — else branch, file not exists.
+        Contract: behaviors:Config:MUST:1
+        """
+        from pathlib import Path
+
+        from amplifier_module_provider_github_copilot.fake_tool_detection import (
+            _load_fake_tool_detection_config_cached,  # pyright: ignore[reportPrivateUsage]
+            load_fake_tool_detection_config,
+        )
+
+        _load_fake_tool_detection_config_cached.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        nonexistent = Path("/nonexistent/path/fake-tool-detection.yaml")
+
+        config = load_fake_tool_detection_config(config_path=nonexistent)
+
+        # Must return defaults — detection still operational
+        assert len(config.patterns) > 0, (
+            "Nonexistent config path must return defaults, not empty patterns. "
+            "Contract: behaviors:Config:MUST:1"
+        )
+        _load_fake_tool_detection_config_cached.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+    def test_config_with_null_yaml_content_uses_defaults(
+        self, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        """YAML file that parses to null/empty dict returns defaults.
+
+        Line ~121 in fake_tool_detection.py — yaml.safe_load returns falsy dict.
+        'null' in YAML parses to None (not empty string, which hits L115 instead).
+        Contract: behaviors:Config:MUST:1
+        """
+        from pathlib import Path
+
+        from amplifier_module_provider_github_copilot.fake_tool_detection import (
+            _load_fake_tool_detection_config_cached,  # pyright: ignore[reportPrivateUsage]
+            load_fake_tool_detection_config,
+        )
+
+        _load_fake_tool_detection_config_cached.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        config_path = Path(tmp_path) / "null.yaml"  # type: ignore[arg-type]
+        # 'null' parses to None in YAML — exercises L121 `if not data` branch
+        config_path.write_text("null\n", encoding="utf-8")
+
+        config = load_fake_tool_detection_config(config_path=config_path)
+
+        assert len(config.patterns) > 0, (
+            "Null YAML must return defaults. Contract: behaviors:Config:MUST:1"
+        )
+        _load_fake_tool_detection_config_cached.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+    def test_config_with_all_invalid_patterns_uses_defaults(
+        self, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        """All patterns invalid → compiled_patterns empty → defaults used.
+
+        Line ~139 in fake_tool_detection.py — all regex compiles fail.
+        Contract: behaviors:Config:MUST:1 — must not produce an empty detector.
+        """
+        from pathlib import Path
+
+        from amplifier_module_provider_github_copilot.fake_tool_detection import (
+            _load_fake_tool_detection_config_cached,  # pyright: ignore[reportPrivateUsage]
+            load_fake_tool_detection_config,
+        )
+
+        _load_fake_tool_detection_config_cached.cache_clear()  # pyright: ignore[reportPrivateUsage]
+        config_path = Path(tmp_path) / "all-invalid.yaml"  # type: ignore[arg-type]
+        config_path.write_text(
+            "patterns:\n  - '[invalid('\n  - '(also_broken'\n", encoding="utf-8"
+        )
+
+        config = load_fake_tool_detection_config(config_path=config_path)
+
+        # Must fall back to defaults — detector must remain operational
+        assert len(config.patterns) > 0, (
+            "All-invalid-patterns must fall back to defaults. "
+            "Contract: behaviors:Config:MUST:1"
+        )
+        _load_fake_tool_detection_config_cached.cache_clear()  # pyright: ignore[reportPrivateUsage]
+
+    def test_log_retry_omits_correction_message_when_disabled(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """log_retry with log_correction_message=False omits correction text.
+
+        Line ~264 in fake_tool_detection.py — branch not taken.
+        Contract: behaviors:Logging:MUST:4 — logging is controllable via config.
+        """
+        import logging
+
+        from amplifier_module_provider_github_copilot.fake_tool_detection import (
+            FakeToolDetectionConfig,
+            LoggingConfig,
+            log_retry,
+        )
+
+        config = FakeToolDetectionConfig(
+            patterns=[],
+            correction_message="SECRET_CORRECTION_TEXT",
+            logging=LoggingConfig(
+                log_correction_message=False,
+                level_on_retry="INFO",
+            ),
+        )
+        with caplog.at_level(logging.INFO):
+            log_retry(config, attempt=0, max_attempts=2)
+
+        assert "SECRET_CORRECTION_TEXT" not in caplog.text
+        assert "[FAKE_TOOL_CALL] Retrying" in caplog.text

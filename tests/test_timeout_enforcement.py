@@ -204,3 +204,102 @@ class TestTimeoutEnforcement:
 
         # Should be translated to a kernel LLMError type
         assert isinstance(exc_info.value, LLMError)
+
+    def test_idle_event_wait_has_no_nested_wait_for_with_same_deadline(self) -> None:
+        """Contract: error-hierarchy:AbortError:MUST:2
+
+        _execute_sdk_completion MUST NOT use asyncio.wait_for(idle_event.wait(), ...)
+        with the same deadline as the enclosing asyncio.timeout.
+
+        Using the same deadline for both splits cancel ownership: when both fire
+        simultaneously, asyncio.timeout.__aexit__ may not be the sole owner of the
+        CancelledError and falls back to re-raising it. The CancelledError then
+        escapes to the C-2 guard which misclassifies it as AbortError(retryable=False)
+        instead of LLMTimeoutError(retryable=True). This manifests as the user-visible
+        "Provider call failed: Request cancelled" error on genuine server timeouts.
+
+        The correct implementation: await idle_event.wait() directly.
+        The enclosing async with asyncio.timeout(timeout): at the top of
+        _execute_sdk_completion provides the deadline for ALL awaits within it,
+        including idle_event.wait(), with unambiguous cancel ownership.
+        """
+        import inspect
+
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+
+        source = inspect.getsource(GitHubCopilotProvider._execute_sdk_completion)  # type: ignore[misc]
+
+        # This assertion fails if the nested wait_for pattern is present:
+        assert "wait_for(idle_event.wait()" not in source, (
+            "asyncio.wait_for(idle_event.wait(), timeout=...) found in "
+            "_execute_sdk_completion. This violates "
+            "error-hierarchy:AbortError:MUST:2. The enclosing "
+            "asyncio.timeout() is the sole deadline — use "
+            "await idle_event.wait() directly."
+        )
+
+    @pytest.mark.asyncio
+    async def test_idle_timeout_raises_llm_timeout_not_abort_error(self) -> None:
+        """Contract: error-hierarchy:AbortError:MUST:2
+
+        When asyncio.timeout fires while waiting for idle_event (SDK sends no
+        SESSION_IDLE within the deadline), the result MUST be LLMTimeoutError,
+        NOT AbortError.
+
+        The race: if asyncio.wait_for(idle_event.wait(), timeout=T) nests inside
+        asyncio.timeout(T) with the SAME deadline, both fire simultaneously and
+        cancel ownership is ambiguous — asyncio.timeout.__aexit__ may not convert
+        CancelledError to TimeoutError, allowing it to escape to the C-2 guard
+        which misclassifies as AbortError(retryable=False).
+
+        The fix: await idle_event.wait() directly, relying on the single outer
+        asyncio.timeout for deadline enforcement.
+        """
+        from amplifier_core.llm_errors import AbortError, LLMTimeoutError
+
+        from amplifier_module_provider_github_copilot.provider import (
+            CompletionRequest,
+            GitHubCopilotProvider,
+        )
+
+        provider = GitHubCopilotProvider()
+        handlers: list[Any] = []
+
+        @asynccontextmanager
+        async def mock_session_cm(*_args: Any, **_kwargs: Any) -> AsyncIterator[Any]:
+            mock_session = MagicMock()
+
+            def mock_on(handler: Any) -> Any:
+                handlers.append(handler)
+                return lambda: None
+
+            mock_session.on = MagicMock(side_effect=mock_on)
+            mock_session.session_id = "test-session-id"
+
+            async def mock_send(prompt: str, attachments: list[Any] | None = None) -> str:
+                # send() returns immediately — stall is at idle_event.wait().
+                # This is the exact path that exercises the nested deadline race.
+                # idle_event is never signalled, so asyncio.timeout must fire.
+                return "msg-id"
+
+            mock_session.send = AsyncMock(side_effect=mock_send)
+            mock_session.abort = AsyncMock()
+            mock_session.disconnect = AsyncMock()
+            yield mock_session
+
+        provider._client.session = mock_session_cm  # type: ignore[method-assign]
+
+        request = CompletionRequest(prompt="Hello", model="gpt-4o")
+
+        with pytest.raises(LLMTimeoutError) as exc_info:
+            # Short timeout: asyncio.timeout fires while idle_event never signals.
+            # Contract: error-hierarchy:AbortError:MUST:2 — MUST be LLMTimeoutError.
+            await provider.complete(request, _timeout_seconds=0.05)  # type: ignore[arg-type]
+
+        # Confirm it is the right subtype — NOT AbortError ("Request cancelled")
+        assert not isinstance(exc_info.value, AbortError), (
+            "Got AbortError instead of LLMTimeoutError — nested timeout race misclassified"
+        )
+        assert exc_info.value.retryable is True, "LLMTimeoutError must be retryable"

@@ -42,8 +42,17 @@ error_mappings:
     kernel_error: ContentFilterError
     retryable: false
 
-  - sdk_patterns: ["ConnectionError", "ProcessExitedError"]
-    string_patterns: ["connection refused", "process exited", "connection error"]
+  # Contract: error-hierarchy:ConnectionError:MUST:1
+  # ConnectionError → ProviderUnavailableError (provider endpoint unreachable)
+  # ProcessExitedError → NetworkError (raw process/transport failure)
+  # These were previously grouped under NetworkError — that contradicted the contract.
+  - sdk_patterns: ["ConnectionError"]
+    string_patterns: ["connection refused", "connection error"]
+    kernel_error: ProviderUnavailableError
+    retryable: true
+
+  - sdk_patterns: ["ProcessExitedError"]
+    string_patterns: ["process exited"]
     kernel_error: NetworkError
     retryable: true
 
