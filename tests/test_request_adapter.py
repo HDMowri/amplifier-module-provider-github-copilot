@@ -649,6 +649,4 @@ class TestPromptInjectionPrevention:
             f"Tool result content must be preserved after escaping. Got: {result!r}"
         )
         # tool_call_id must still appear for correlation
-        assert "tc-77" in result, (
-            f"tool_call_id must be preserved in tool result. Got: {result!r}"
-        )
+        assert "tc-77" in result, f"tool_call_id must be preserved in tool result. Got: {result!r}"

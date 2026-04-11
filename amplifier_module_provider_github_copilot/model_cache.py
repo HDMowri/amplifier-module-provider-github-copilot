@@ -2,28 +2,21 @@
 
 Contract: contracts/behaviors.md (ModelCache section)
 
-Three-Medium Architecture:
-- Python: Cache mechanism (this module)
-- YAML: TTL policy values (config/model_cache.yaml)
-- Markdown: Requirements (contracts/behaviors.md)
-
+TTL policy values come from config/policy.py (CacheConfig dataclass).
 Philosophy: Fail clearly rather than fail silently with stale data.
-No hardcoded fallback dicts — cache is transparent layer only.
 """
 
 from __future__ import annotations
 
-import functools
-import importlib.resources
 import json
 import logging
 import os
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import yaml
+from .config._policy import load_cache_config
 
 if TYPE_CHECKING:
     from .models import CopilotModelInfo
@@ -31,60 +24,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Cache Policy Loading (Three-Medium Architecture: YAML = policy)
-# =============================================================================
-
-
-@functools.lru_cache(maxsize=1)
-def load_cache_config() -> dict[str, Any]:
-    """Load cache policy from config/model_cache.yaml.
-
-    Contract: behaviors:ModelCache:SHOULD:2
-    Three-Medium Architecture: Policy values come from YAML
-
-    Returns:
-        Dictionary with cache policy settings.
-    """
-    try:
-        # Try package resources first (installed wheel)
-        files = importlib.resources.files("amplifier_module_provider_github_copilot")
-        config_path = files.joinpath("config", "model_cache.yaml")
-        content = config_path.read_text(encoding="utf-8")
-        return yaml.safe_load(content)  # type: ignore[no-any-return]
-    except Exception:
-        # Fallback to file path (development)
-        config_file = Path(__file__).parent / "config" / "model_cache.yaml"
-        if config_file.exists():
-            content = config_file.read_text(encoding="utf-8")
-            return yaml.safe_load(content)  # type: ignore[no-any-return]
-
-        # Return sensible defaults if config missing
-        logger.warning("model_cache.yaml not found, using defaults")
-        return {
-            "cache": {
-                "disk_ttl_seconds": 86400,
-                "max_stale_seconds": 604800,
-                "cache_filename": "models_cache.json",
-            }
-        }
-
-
 def get_cache_ttl_seconds() -> int:
     """Get cache TTL in seconds from config.
 
     Contract: behaviors:ModelCache:SHOULD:2
     """
-    config = load_cache_config()
-    cache_config = config.get("cache", {})
-    return int(cache_config.get("disk_ttl_seconds", 86400))
+    return load_cache_config().disk_ttl_seconds
 
 
 def get_cache_filename() -> str:
     """Get cache filename from config."""
-    config = load_cache_config()
-    cache_config = config.get("cache", {})
-    return str(cache_config.get("cache_filename", "models_cache.json"))
+    return load_cache_config().cache_filename
 
 
 # =============================================================================
@@ -201,7 +151,7 @@ def read_cache(
 
     Contract: behaviors:ModelCache:SHOULD:1, SHOULD:2
     - SHOULD cache SDK models to disk for session persistence
-    - SHOULD respect TTL from config/model_cache.yaml
+    - SHOULD respect TTL from config/policy.py (CacheConfig)
 
     Args:
         cache_file: Optional path override (for testing). Uses default if None.

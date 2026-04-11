@@ -578,7 +578,7 @@ def load_event_config(config_path: str | Path | None = None) -> EventConfig:
     Config lives inside the wheel at amplifier_module_provider_github_copilot/config/
     """
     if config_path is None:
-        config_path = str(Path(__file__).parent / "config" / "events.yaml")
+        config_path = str(Path(__file__).parent / "config" / "data" / "events.yaml")
     else:
         config_path = str(config_path)
     config = _load_event_config_cached(config_path)

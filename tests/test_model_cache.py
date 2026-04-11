@@ -2,11 +2,7 @@
 Tests for model cache disk persistence.
 
 Contract: contracts/behaviors.md (ModelCache section)
-
-Three-Medium Architecture:
-- Python: Cache mechanism (model_cache.py)
-- YAML: TTL policy values (config/model_cache.yaml)
-- Markdown: Requirements (contracts/behaviors.md)
+TTL policy values: config/policy.py (CacheConfig dataclass)
 """
 
 from __future__ import annotations
@@ -298,20 +294,19 @@ class TestReadCache:
 
 
 # =============================================================================
-# Phase 2a: Cache Policy from YAML
-# Contract: behaviors:ModelCache:SHOULD:2 (Three-Medium Architecture)
+# Phase 2a: Cache Policy
+# Contract: behaviors:ModelCache:SHOULD:2
 # =============================================================================
 
 
 class TestCachePolicy:
-    """Test that cache policy is loaded from YAML.
+    """Test cache policy configuration.
 
     Contract: behaviors:ModelCache:SHOULD:2
-    Three-Medium Architecture: Policy values come from YAML
     """
 
     def test_cache_config_exists(self) -> None:
-        """config/model_cache.yaml MUST exist."""
+        """load_cache_config() MUST return a valid config."""
         from amplifier_module_provider_github_copilot.model_cache import (
             load_cache_config,
         )
@@ -320,13 +315,14 @@ class TestCachePolicy:
         assert config is not None
 
     def test_cache_config_has_ttl(self) -> None:
-        """config/model_cache.yaml MUST define disk_ttl_seconds."""
+        """CacheConfig MUST define disk_ttl_seconds."""
         from amplifier_module_provider_github_copilot.model_cache import (
             load_cache_config,
         )
 
         config = load_cache_config()
-        assert "disk_ttl_seconds" in config or "cache" in config
+        assert hasattr(config, "disk_ttl_seconds")
+        assert isinstance(config.disk_ttl_seconds, int)
 
     def test_ttl_is_reasonable(self) -> None:
         """TTL SHOULD be at least 1 hour and at most 7 days."""
@@ -475,19 +471,20 @@ class TestWriteCacheErrorHandling:
 
 
 class TestLoadCacheConfigFallback:
-    """Tests for load_cache_config fallback behavior."""
+    """Tests for load_cache_config return value."""
 
     def test_load_cache_config_returns_valid_config(self) -> None:
-        """load_cache_config() returns valid configuration."""
+        """load_cache_config() returns a CacheConfig with expected fields."""
+        from amplifier_module_provider_github_copilot.config._policy import CacheConfig
         from amplifier_module_provider_github_copilot.model_cache import (
             load_cache_config,
         )
 
         config = load_cache_config()
 
-        assert isinstance(config, dict)
-        assert "cache" in config
-        assert "disk_ttl_seconds" in config["cache"]
+        assert isinstance(config, CacheConfig)
+        assert config.disk_ttl_seconds == 86400
+        assert config.cache_filename == "models_cache.json"
 
 
 class TestCacheFileOperations:
@@ -575,33 +572,6 @@ class TestInvalidateCacheErrorHandling:
         # The important thing is no exception was raised
 
 
-class TestLoadCacheConfigImportlibFallback:
-    """Tests for load_cache_config importlib.resources fallback."""
-
-    def test_load_cache_config_uses_filesystem_fallback(self, tmp_path: Path, caplog: Any) -> None:
-        """load_cache_config() falls back to filesystem when importlib fails."""
-        import logging
-
-        from amplifier_module_provider_github_copilot.model_cache import load_cache_config
-
-        # Clear the lru_cache to test fresh load
-        load_cache_config.cache_clear()
-
-        # Mock importlib.resources.files to fail
-        with patch("importlib.resources.files") as mock_files:
-            mock_files.side_effect = Exception("importlib failed")
-
-            with caplog.at_level(logging.DEBUG):
-                config = load_cache_config()
-
-        # Should still return valid config from filesystem fallback
-        assert isinstance(config, dict)
-        assert "cache" in config
-
-        # Clear cache again for other tests
-        load_cache_config.cache_clear()
-
-
 # =============================================================================
 # Additional Coverage Tests
 # Coverage targets: lines 63-64, 182-185, 273
@@ -686,42 +656,3 @@ class TestInvalidateCacheEdgeCases:
         with patch.object(Path, "unlink", mock_unlink):
             # Should log warning but not raise
             invalidate_cache(cache_file=cache_file)
-
-
-class TestLoadCacheConfigMissingFile:
-    """Tests for load_cache_config when config file is missing.
-
-    Covers lines 63-64: default fallback when config missing.
-    """
-
-    def test_load_cache_config_missing_both_sources(self, tmp_path: Path) -> None:
-        """load_cache_config() returns defaults when both sources fail."""
-        from unittest.mock import patch
-
-        from amplifier_module_provider_github_copilot.model_cache import load_cache_config
-
-        # Clear cache to test fresh load
-        load_cache_config.cache_clear()
-
-        # Mock both importlib and filesystem to fail
-        with patch("importlib.resources.files") as mock_files:
-            mock_files.side_effect = ModuleNotFoundError("No module")
-
-            # Also mock Path.exists to return False
-            original_exists = Path.exists
-
-            def mock_exists(self: Path) -> bool:
-                if "model_cache.yaml" in str(self):
-                    return False
-                return original_exists(self)
-
-            with patch.object(Path, "exists", mock_exists):
-                config = load_cache_config()
-
-        # Should return defaults
-        assert isinstance(config, dict)
-        assert "cache" in config
-        assert "disk_ttl_seconds" in config["cache"]
-
-        # Clear cache for other tests
-        load_cache_config.cache_clear()
