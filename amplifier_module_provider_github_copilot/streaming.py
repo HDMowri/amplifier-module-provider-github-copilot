@@ -324,9 +324,7 @@ class StreamingAccumulator:
                 tc = block["data"]
                 tool_call_id = tc.get("id", "") or str(uuid.uuid4())
                 tc_name = tc.get("name", "")
-                tc_args: dict[str, Any] = (
-                    tc.get("arguments", {}) if isinstance(tc.get("arguments"), dict) else {}
-                )
+                tc_args: dict[str, Any] = _parse_tool_arguments(tc.get("arguments"))
                 # ToolCallBlock in content (ContentBlockUnion member); field is `input`
                 # Contract: streaming-contract:ToolCallBlock:MUST:1
                 content.append(ToolCallBlock(id=tool_call_id, name=tc_name, input=tc_args))
