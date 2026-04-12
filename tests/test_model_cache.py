@@ -656,3 +656,201 @@ class TestInvalidateCacheEdgeCases:
         with patch.object(Path, "unlink", mock_unlink):
             # Should log warning but not raise
             invalidate_cache(cache_file=cache_file)
+
+
+class TestReadCachePartialRecovery:
+    """Tests for S5 fix: malformed cache entries are skipped; valid entries preserved.
+
+    Before fix: list comprehension raised KeyError on first bad entry → entire cache discarded.
+    After fix: per-entry try/except skips bad entries while preserving valid ones.
+    """
+
+    def test_valid_entries_returned_when_one_malformed(self, tmp_path: Path) -> None:
+        """One malformed entry is skipped; valid entry is returned."""
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "1.0",
+            "models": [
+                {
+                    "id": "good-model",
+                    "name": "Good Model",
+                    "context_window": 4096,
+                    "max_output_tokens": 1024,
+                },
+                {
+                    # Missing required 'id' and 'name' fields — must be skipped
+                    "context_window": 999,
+                    "max_output_tokens": 100,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        # S5: should recover 1 valid model, not discard entire cache
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].id == "good-model"
+
+    def test_all_malformed_entries_triggers_cache_miss(self, tmp_path: Path) -> None:
+        """When ALL entries are malformed, returns None (cache miss) — not an empty list.
+
+        S5 Fix: when every entry is corrupt the correct behaviour is to force a
+        live API call (return None), not return [] which would signal 'no models
+        available'.  The live API will repopulate the cache with valid data.
+        """
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "1.0",
+            "models": [
+                {"missing_required_fields": True},
+                {"also_missing": "required_id_and_name"},
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        # None = cache miss: all entries corrupt, must call live API to repopulate.
+        assert result is None, (
+            f"Expected None (cache miss) when all entries are malformed, got: {result!r}"
+        )
+
+    def test_multiple_valid_entries_all_returned(self, tmp_path: Path) -> None:
+        """All valid entries are returned when there are no malformed entries."""
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "1.0",
+            "models": [
+                {
+                    "id": "model-a",
+                    "name": "Model A",
+                    "context_window": 4096,
+                    "max_output_tokens": 1024,
+                },
+                {
+                    "id": "model-b",
+                    "name": "Model B",
+                    "context_window": 8192,
+                    "max_output_tokens": 2048,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        assert result is not None
+        assert len(result) == 2
+        assert {m.id for m in result} == {"model-a", "model-b"}
+
+
+class TestReadCacheVersionCheck:
+    """Tests for S8 fix: cache schema version is validated on read.
+
+    Before fix: version was written to cache but never checked on read.
+    After fix: unsupported versions force a cache miss to avoid parsing unknown schemas.
+    """
+
+    def test_supported_version_accepted(self, tmp_path: Path) -> None:
+        """Cache with version='1.0' is accepted and parsed normally."""
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "1.0",
+            "models": [
+                {
+                    "id": "model-v1",
+                    "name": "Model V1",
+                    "context_window": 4096,
+                    "max_output_tokens": 1024,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].id == "model-v1"
+
+    def test_unsupported_version_returns_none(self, tmp_path: Path) -> None:
+        """Cache with unknown future version forces cache miss (returns None)."""
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            "version": "2.0",  # Unsupported future version
+            "models": [
+                {
+                    "id": "future-model",
+                    "name": "Future",
+                    "context_window": 8192,
+                    "max_output_tokens": 2048,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        # Version mismatch → cache miss → force live API call
+        assert result is None
+
+    def test_missing_version_treated_as_supported(self, tmp_path: Path) -> None:
+        """Old caches without 'version' field are treated as '1.0' (backward compat)."""
+        import json
+        import time
+
+        from amplifier_module_provider_github_copilot.model_cache import read_cache
+
+        cache_data = {
+            "timestamp": time.time(),
+            # No 'version' key — pre-versioning cache format
+            "models": [
+                {
+                    "id": "legacy-model",
+                    "name": "Legacy",
+                    "context_window": 2048,
+                    "max_output_tokens": 512,
+                },
+            ],
+        }
+        cache_file = tmp_path / "models_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+
+        result = read_cache(cache_file=cache_file)
+
+        # Missing version defaults to "1.0" → accepted (backward compat)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].id == "legacy-model"

@@ -1253,3 +1253,61 @@ class TestConfigurationFailFast:
         # Config should have required fields populated
         assert config.idle_event_types, "idle_events should be populated"
         assert config.bridge_mappings is not None, "bridge_mappings should exist"
+
+
+class TestParseToolArguments:
+    """Tests for S4 fix: _parse_tool_arguments handles str|dict|other SDK argument variance.
+
+    Contract: streaming-contract:ToolCallBlock:MUST:1
+    """
+
+    def test_dict_args_returned_as_is(self) -> None:
+        """dict arguments are returned unchanged (no-op, regression-safe)."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        args = {"key": "value", "count": 42}
+        result = _parse_tool_arguments(args)
+        assert result == args
+
+    def test_json_string_args_parsed(self) -> None:
+        """JSON string arguments are parsed to dict."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments('{"file": "main.py", "line": 10}')
+        assert result == {"file": "main.py", "line": 10}
+
+    def test_malformed_json_returns_empty_dict(self) -> None:
+        """Malformed JSON string returns {} without raising."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments("not json at all {{")
+        assert result == {}
+
+    def test_none_returns_empty_dict(self) -> None:
+        """None (missing arguments) returns {}."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments(None)
+        assert result == {}
+
+    def test_json_array_returns_empty_dict(self) -> None:
+        """JSON array (not a dict) returns {} — non-dict parsed values are malformed."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments("[1, 2, 3]")
+        assert result == {}
+
+    def test_empty_dict_args_returned(self) -> None:
+        """Empty dict is a valid (no-arg) tool call — returned as-is."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        result = _parse_tool_arguments({})
+        assert result == {}
+
+    def test_nested_dict_preserved(self) -> None:
+        """Nested dict values are preserved when input is a dict."""
+        from amplifier_module_provider_github_copilot.streaming import _parse_tool_arguments
+
+        args = {"query": "test", "options": {"limit": 10, "offset": 0}}
+        result = _parse_tool_arguments(args)
+        assert result == args
