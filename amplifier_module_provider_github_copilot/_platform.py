@@ -91,8 +91,10 @@ def get_platform_info() -> PlatformInfo:
         try:
             with open("/proc/version", encoding="utf-8") as f:
                 is_wsl = "microsoft" in f.read().lower()
-        except OSError:  # pragma: no cover — only when /proc/version absent (non-Linux, containers)
-            pass  # /proc/version not present on non-Linux or in some containers
+        except OSError:
+            # /proc/version not present on non-Linux Unix variants (macOS already
+            # branched above) or in some minimal containers. Default is_wsl=False.
+            pass
         return PlatformInfo(
             name="Unix",
             is_windows=False,
@@ -170,7 +172,11 @@ def find_cli_in_path() -> Path | None:
     if primary:
         return Path(primary)
 
-    # Try alternate name (handles WSL with Windows PATH)
+    # Try alternate name (handles WSL with Windows PATH visible).
+    # Intentionally inverted: on Windows we look for the Unix-named "copilot"
+    # as a fallback (e.g. cygwin/git-bash on PATH); on Unix we look for
+    # "copilot.exe" (e.g. WSL with Windows binaries on PATH). Reads "backwards"
+    # by design — the platform-native name was already tried above.
     alternate = CLI_BINARY_NAME_UNIX if platform_info.is_windows else CLI_BINARY_NAME_WINDOWS
     fallback = shutil.which(alternate)
     if fallback:

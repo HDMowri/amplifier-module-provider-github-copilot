@@ -5,7 +5,8 @@ Contract: contracts/sdk-boundary.md
 Tests in this module verify:
 - ImportQuarantine:MUST:1 — SDK imports confined to sdk_adapter/
 - ImportQuarantine:MUST:5 — ImportError with install instructions if SDK absent
-- ImportQuarantine:MUST:6 — Multi-level fallback for moved SDK types
+- ImportQuarantine:MUST:6 — Direct imports for pinned SDK version (no fallback chains)
+- ImportQuarantine:MUST:7 — SDK constructor calls encapsulated via factory
 - Membrane:MUST:1 — Import from sdk_adapter package, not submodules
 - Membrane:MUST:3 — __init__.py does not expose _imports module
 """
@@ -147,14 +148,13 @@ class TestSDKImportsRealPath:
         finally:
             self._restore_import_state(original_skip, original_module)
 
-    def test_permission_request_result_missing_sets_none(self) -> None:
-        """PermissionRequestResult MUST be None when absent from all SDK locations.
+    def test_permission_request_result_loads_from_copilot_session(self) -> None:
+        """PermissionRequestResult MUST resolve directly from copilot.session.
 
         Contract: sdk-boundary:ImportQuarantine:MUST:6
 
-        Simulates SDK < 0.1.28 which predates PermissionRequestResult entirely.
-        All three fallback levels (copilot.types, copilot root, copilot.session)
-        fail, resulting in PermissionRequestResult = None.
+        SDK v0.3.0 canonical location: copilot.session.
+        Direct import — no fallback chain.
         """
         # Contract: sdk-boundary:ImportQuarantine:MUST:6
         original_skip, original_module = self._save_import_state()
@@ -162,103 +162,10 @@ class TestSDKImportsRealPath:
         try:
             os.environ.pop("SKIP_SDK_CHECK", None)
 
-            # Mock copilot with CopilotClient but no PermissionRequestResult anywhere
-            mock_copilot = MagicMock(spec=["CopilotClient"])
-            mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
-
-            with patch.dict(
-                "sys.modules",
-                {
-                    "copilot": mock_copilot,
-                    "copilot.types": None,  # ImportError on from-import
-                    "copilot.session": None,  # ImportError on from-import
-                },
-            ):
-                mod = importlib.import_module(
-                    "amplifier_module_provider_github_copilot.sdk_adapter._imports"
-                )
-                # PermissionRequestResult must be None when all fallbacks fail
-                assert mod.PermissionRequestResult is None, (
-                    "PermissionRequestResult should be None when absent from all SDK locations"
-                )
-        finally:
-            self._restore_import_state(original_skip, original_module)
-
-    def test_subprocess_config_loads_when_copilot_types_absent(self) -> None:
-        """SubprocessConfig MUST resolve even when copilot.types does not exist.
-
-        Contract: sdk-boundary:ImportQuarantine:MUST:6
-
-        Regression test for SDK 0.2.1 breaking change: copilot.types was removed.
-        SubprocessConfig moved to copilot.client, re-exported from copilot root.
-
-        Before fix: from copilot.types import SubprocessConfig → ModuleNotFoundError
-                    → SubprocessConfig = None → ConfigurationError with any GitHub token
-        After fix:  fallback to from copilot import SubprocessConfig → succeeds
-        """
-        # Contract: sdk-boundary:ImportQuarantine:MUST:6
-        original_skip, original_module = self._save_import_state()
-
-        try:
-            os.environ.pop("SKIP_SDK_CHECK", None)
-
-            # Simulate SDK 0.2.1: copilot root has SubprocessConfig,
-            # but copilot.types does NOT exist.
-            mock_subprocess_config = MagicMock(name="SubprocessConfig")
+            mock_prr = MagicMock(name="PermissionRequestResult")
             mock_copilot = MagicMock(spec=["CopilotClient", "SubprocessConfig"])
             mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
-            mock_copilot.SubprocessConfig = mock_subprocess_config
-
-            with patch.dict(
-                "sys.modules",
-                {
-                    "copilot": mock_copilot,
-                    "copilot.types": None,  # None → ModuleNotFoundError on import
-                },
-            ):
-                mod = importlib.import_module(
-                    "amplifier_module_provider_github_copilot.sdk_adapter._imports"
-                )
-
-            # SubprocessConfig MUST be the mock from copilot root, not None
-            assert mod.SubprocessConfig is mock_subprocess_config, (
-                f"SubprocessConfig is {mod.SubprocessConfig!r} but should be "
-                f"{mock_subprocess_config!r}. _imports.py must fall back to "
-                "'from copilot import SubprocessConfig' when copilot.types is absent."
-            )
-
-        finally:
-            self._restore_import_state(original_skip, original_module)
-
-    def test_permission_request_result_falls_back_to_copilot_session(self) -> None:
-        """PermissionRequestResult MUST resolve from copilot.session when copilot.types absent.
-
-        Contract: sdk-boundary:ImportQuarantine:MUST:6
-
-        Regression guard for SDK v0.2.1 breaking change: copilot/types.py was deleted
-        (PR #871). PermissionRequestResult moved to copilot.session and is NOT
-        re-exported from the copilot root package.
-
-        Before fix:  copilot.types fails → copilot root fails → PermissionRequestResult = None
-                     → deny_permission_request() returns dict → SDK calls .kind → AttributeError
-                     → wrong deny reason: 'denied-no-approval-rule-and-could-not-request-from-user'
-
-        After fix:   copilot.types fails → copilot root fails → copilot.session succeeds
-                     → PermissionRequestResult is the real class → .kind works → 'denied-by-rules'
-        """
-        # Contract: sdk-boundary:ImportQuarantine:MUST:6
-        original_skip, original_module = self._save_import_state()
-
-        try:
-            os.environ.pop("SKIP_SDK_CHECK", None)
-
-            # Simulate SDK v0.2.1:
-            # - copilot root has CopilotClient but NOT PermissionRequestResult
-            # - copilot.types is deleted (None → ImportError on from-import)
-            # - copilot.session has PermissionRequestResult
-            mock_prr = MagicMock(name="PermissionRequestResult")
-            mock_copilot = MagicMock(spec=["CopilotClient"])
-            mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
+            mock_copilot.SubprocessConfig = MagicMock(name="SubprocessConfig")
 
             mock_copilot_session = MagicMock(spec=["PermissionRequestResult"])
             mock_copilot_session.PermissionRequestResult = mock_prr
@@ -267,7 +174,6 @@ class TestSDKImportsRealPath:
                 "sys.modules",
                 {
                     "copilot": mock_copilot,
-                    "copilot.types": None,  # None → ImportError on from-import
                     "copilot.session": mock_copilot_session,
                 },
             ):
@@ -275,15 +181,216 @@ class TestSDKImportsRealPath:
                     "amplifier_module_provider_github_copilot.sdk_adapter._imports"
                 )
 
-            # PermissionRequestResult MUST be the mock from copilot.session
             assert mod.PermissionRequestResult is mock_prr, (
                 f"PermissionRequestResult is {mod.PermissionRequestResult!r} but should be "
-                f"{mock_prr!r}. _imports.py must fall back to "
-                "'from copilot.session import PermissionRequestResult'."
+                f"{mock_prr!r}. _imports.py must import directly from copilot.session."
             )
 
         finally:
             self._restore_import_state(original_skip, original_module)
+
+    def test_subprocess_config_loads_from_copilot_root(self) -> None:
+        """SubprocessConfig MUST resolve directly from copilot root.
+
+        Contract: sdk-boundary:ImportQuarantine:MUST:6
+
+        SDK v0.3.0 canonical location: copilot root (re-exported from copilot.client).
+        Direct import — no fallback chain.
+        """
+        # Contract: sdk-boundary:ImportQuarantine:MUST:6
+        original_skip, original_module = self._save_import_state()
+
+        try:
+            os.environ.pop("SKIP_SDK_CHECK", None)
+
+            mock_subprocess_config = MagicMock(name="SubprocessConfig")
+            mock_copilot = MagicMock(spec=["CopilotClient", "SubprocessConfig"])
+            mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
+            mock_copilot.SubprocessConfig = mock_subprocess_config
+
+            mock_copilot_session = MagicMock(spec=["PermissionRequestResult"])
+            mock_copilot_session.PermissionRequestResult = MagicMock(name="PermissionRequestResult")
+
+            with patch.dict(
+                "sys.modules",
+                {
+                    "copilot": mock_copilot,
+                    "copilot.session": mock_copilot_session,
+                },
+            ):
+                mod = importlib.import_module(
+                    "amplifier_module_provider_github_copilot.sdk_adapter._imports"
+                )
+
+            assert mod.SubprocessConfig is mock_subprocess_config, (
+                f"SubprocessConfig is {mod.SubprocessConfig!r} but should be "
+                f"{mock_subprocess_config!r}. _imports.py must import directly from copilot root."
+            )
+
+        finally:
+            self._restore_import_state(original_skip, original_module)
+
+
+class TestSDKConstructorEncapsulation:
+    """Verify SDK constructor calls are encapsulated in _imports.py.
+
+    Contract: sdk-boundary:ImportQuarantine:MUST:7
+    """
+
+    def test_make_permission_denied_exists_in_imports(self) -> None:
+        """_imports.py MUST expose make_permission_denied factory.
+
+        Contract: sdk-boundary:ImportQuarantine:MUST:7
+
+        The factory encapsulates SDK constructor field knowledge so
+        that client.py expresses intent only.
+        """
+        # Contract: sdk-boundary:ImportQuarantine:MUST:7
+        content = IMPORTS_FILE.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+
+        function_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        assert "make_permission_denied" in function_names, (
+            "ImportQuarantine:MUST:7 — _imports.py must define make_permission_denied factory"
+        )
+
+    def test_make_permission_denied_returns_reject(self) -> None:
+        """make_permission_denied MUST return result with kind='reject'.
+
+        Contract: sdk-boundary:ImportQuarantine:MUST:7
+
+        In test mode (SKIP_SDK_CHECK=1), PermissionRequestResult is None
+        and the factory returns a dict. Verify exact field value.
+        """
+        # Contract: sdk-boundary:ImportQuarantine:MUST:7
+        from amplifier_module_provider_github_copilot.sdk_adapter._imports import (
+            make_permission_denied,
+        )
+
+        result = make_permission_denied()
+
+        # Handle both real SDK object and dict fallback
+        kind = result.kind if hasattr(result, "kind") else result.get("kind")
+        assert kind == "reject", (
+            f"ImportQuarantine:MUST:7 — make_permission_denied must return kind='reject', "
+            f"got {kind!r}"
+        )
+        assert isinstance(kind, str), (
+            f"ImportQuarantine:MUST:7 — kind must be str, got {type(kind).__name__}"
+        )
+
+    def test_client_does_not_call_permission_constructor_directly(self) -> None:
+        """client.py MUST NOT call PermissionRequestResult(...) directly.
+
+        Contract: sdk-boundary:ImportQuarantine:MUST:7
+
+        SDK constructor calls must be encapsulated in _imports.py via factory.
+        client.py must express intent only (call make_permission_denied),
+        never instantiate SDK types directly.
+        """
+        # Contract: sdk-boundary:ImportQuarantine:MUST:7
+        client_file = SDK_ADAPTER_PATH / "client.py"
+        assert client_file.exists(), f"{client_file} must exist in the repository"
+
+        content = client_file.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                # Check for direct PermissionRequestResult(...) calls
+                if isinstance(node.func, ast.Name) and node.func.id == "PermissionRequestResult":
+                    violations.append(
+                        f"PermissionRequestResult(...) called directly at line {node.lineno}"
+                    )
+                elif (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "PermissionRequestResult"
+                ):
+                    violations.append(
+                        f"*.PermissionRequestResult(...) called directly at line {node.lineno}"
+                    )
+
+        assert violations == [], (
+            "client.py calls SDK constructor directly — violates "
+            "sdk-boundary:ImportQuarantine:MUST:7:\n"
+            + "\n".join(f"  - {v}" for v in violations)
+            + "\n\nFix: use make_permission_denied() factory from _imports.py"
+        )
+
+    def test_make_permission_denied_uses_only_kind_kwarg(self) -> None:
+        """make_permission_denied MUST pass only kind= to PermissionRequestResult constructor.
+
+        Contract: sdk-boundary:ImportQuarantine:MUST:7
+
+        SDK v0.3.0 removed the rules, feedback, message, and path fields from
+        PermissionRequestResult. Only kind= must be passed. Any extra kwarg causes
+        TypeError at runtime.
+        """
+        # Contract: sdk-boundary:ImportQuarantine:MUST:7
+        content = IMPORTS_FILE.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+
+        call_found = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "make_permission_denied":
+                for call_node in ast.walk(node):
+                    if (
+                        isinstance(call_node, ast.Call)
+                        and isinstance(call_node.func, ast.Name)
+                        and call_node.func.id == "PermissionRequestResult"
+                    ):
+                        call_found = True
+                        assert len(call_node.args) == 0, (
+                            "PermissionRequestResult must be called with keyword-only args — "
+                            "no positional args allowed"
+                        )
+                        kwarg_keys = [kw.arg for kw in call_node.keywords]
+                        assert kwarg_keys == ["kind"], (
+                            f"PermissionRequestResult must be called with only kind= kwarg, "
+                            f"got {kwarg_keys!r}. "
+                            "SDK v0.3.0 removed: rules, feedback, message, path fields — "
+                            "extra kwargs cause TypeError."
+                        )
+
+        assert call_found, (
+            "ImportQuarantine:MUST:7 — make_permission_denied must call PermissionRequestResult"
+        )
+
+
+class TestSDKNoFallbackChains:
+    """Verify _imports.py has no fallback chains or deleted-module imports.
+
+    Contract: sdk-boundary:ImportQuarantine:MUST:6
+    """
+
+    def test_imports_py_has_no_copilot_types_import(self) -> None:
+        """_imports.py MUST NOT import from copilot.types.
+
+        Contract: sdk-boundary:ImportQuarantine:MUST:6
+
+        copilot.types was deleted in SDK v0.2.1. Any import from it fails at
+        import time with SDK >= v0.2.1. With pin >=0.3.0, this module is always
+        absent. Direct imports from canonical locations only — no fallback chains.
+        """
+        # Contract: sdk-boundary:ImportQuarantine:MUST:6
+        content = IMPORTS_FILE.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "copilot.types":
+                names = ", ".join(alias.name for alias in node.names)
+                violations.append(f"from copilot.types import {names} at line {node.lineno}")
+
+        assert violations == [], (
+            "_imports.py imports from copilot.types (deleted in SDK v0.2.1):\n"
+            + "\n".join(f"  - {v}" for v in violations)
+            + "\n\nFix: use canonical SDK v0.3.0 locations — "
+            "PermissionRequestResult: copilot.session | SubprocessConfig: copilot root."
+        )
 
 
 class TestMembraneAPIPattern:

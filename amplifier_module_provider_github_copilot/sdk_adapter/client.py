@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from amplifier_core.llm_errors import ConfigurationError, ProviderUnavailableError
 
 from .._permissions import ensure_executable
-from .._platform import locate_cli_binary
+from .._platform import get_platform_info, locate_cli_binary
 from ..config_loader import load_sdk_protection_config
 
 # Domain modules are NOT imported at module level — importing CopilotClientWrapper
@@ -118,20 +118,9 @@ def deny_permission_request(request: Any) -> Any:
 
     Contract: contracts/deny-destroy.md
     """
-    # Import from quarantine module
-    from ._imports import PermissionRequestResult
+    from ._imports import make_permission_denied
 
-    if PermissionRequestResult is not None:  # type: ignore[truthy-function]
-        return PermissionRequestResult(  # type: ignore[return-value]
-            kind="denied-by-rules",
-            message="Amplifier orchestrator controls all operations",
-        )
-    # SDK < 0.1.28 doesn't have PermissionRequestResult
-    # Return dict fallback (only reached with SDK < 0.1.28, not in current supported range)
-    return {  # pragma: no cover
-        "kind": "denied-by-rules",
-        "message": "Amplifier orchestrator controls all operations",
-    }
+    return make_permission_denied()
 
 
 def _load_error_config_once() -> Any:
@@ -372,8 +361,44 @@ class CopilotClientWrapper:
                 # uv strips execute permissions from bundled binaries; repair here.
                 # No-op on Windows; safe to call if binary not found.
                 binary_path = locate_cli_binary()
-                if binary_path:
-                    ensure_executable(binary_path)
+                if binary_path and not ensure_executable(binary_path):
+                    # State-leak guard: clear the constructed-but-never-started
+                    # client so subsequent calls retry initialization rather than
+                    # returning a stale unstarted client via the double-check
+                    # locking at lines 322-326. Mirrors the pattern at line 402.
+                    self._owned_client = None
+                    # Fail fast with diagnostic context. Without this, start()
+                    # would surface an opaque OS EACCES error two layers
+                    # removed from the actual cause. ensure_executable detects
+                    # silent chmod no-ops via post-chmod stat() verification.
+                    platform_info = get_platform_info()
+                    if platform_info.is_wsl:
+                        hint = (
+                            "This typically occurs on Windows-mounted paths under "
+                            "/mnt/<drive>/ when the DrvFs 'metadata' option is not "
+                            "enabled. Move the SDK install to a native Linux filesystem "
+                            "(e.g. ~/.local/...) or remount with 'metadata' enabled."
+                        )
+                    elif platform_info.is_windows:
+                        # ensure_executable() short-circuits to True on Windows,
+                        # so this branch should be unreachable. Defensive only.
+                        hint = (
+                            "Unexpected on Windows — please file a bug at "
+                            "https://github.com/microsoft/amplifier-module-provider-github-copilot/issues."
+                        )
+                    else:
+                        hint = (
+                            "This can occur on network shares (NFS, SMB, CIFS), "
+                            "container volume mounts, or some FUSE drivers that "
+                            "accept chmod() but do not persist POSIX mode bits. "
+                            "Move the SDK install to a local filesystem with full "
+                            "POSIX permission support."
+                        )
+                    raise ProviderUnavailableError(
+                        f"Cannot set execute permission on Copilot binary at {binary_path}. "
+                        f"{hint}",
+                        provider="github-copilot",
+                    )
 
                 # Start client - clear on failure for retry
                 try:
@@ -397,6 +422,15 @@ class CopilotClientWrapper:
                     f"Copilot SDK not installed: {redact_sensitive_text(e)}",
                     provider="github-copilot",
                 ) from e
+            except (ProviderUnavailableError, ConfigurationError):
+                # Already a typed amplifier-core error with intentional semantics:
+                #   - ProviderUnavailableError: ensure_executable failure (above).
+                #   - ConfigurationError: explicit token + missing SubprocessConfig
+                #     (Security P1-6, fail-closed). Translating it would lose the
+                #     "misconfigured, not unavailable" distinction the orchestrator
+                #     needs for routing/retry decisions.
+                # Don't re-translate — preserve typed semantics and message.
+                raise
             except Exception as e:
                 error_config = self._get_error_config()
                 raise self._get_translate_error()(e, error_config) from e

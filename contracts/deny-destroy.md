@@ -140,7 +140,7 @@ From GOLDEN_VISION_V2.md:
 | Anchor | Clause |
 |--------|--------|
 | `deny-destroy:PermissionRequest:MUST:1` | Install on_permission_request handler on client initialization |
-| `deny-destroy:PermissionRequest:MUST:2` | Handler returns kind="denied-by-rules" for ALL requests |
+| `deny-destroy:PermissionRequest:MUST:2` | Handler returns kind="reject" for ALL requests |
 
 ### SessionLifecycle
 

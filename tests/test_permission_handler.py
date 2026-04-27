@@ -37,12 +37,12 @@ class TestOnPermissionRequestHandler:
 
         # Result can be PermissionRequestResult (with .kind) or dict fallback
         if hasattr(result, "kind"):
-            assert result.kind == "denied-by-rules", (
-                "Permission request must be denied with kind='denied-by-rules'"
+            assert result.kind == "reject", (
+                "Permission request must be denied with kind='reject'"
             )
         else:
-            assert result["kind"] == "denied-by-rules", (
-                "Permission request must be denied with kind='denied-by-rules'"
+            assert result["kind"] == "reject", (
+                "Permission request must be denied with kind='reject'"
             )
 
     async def test_permission_handler_wired_in_session_options(self) -> None:
@@ -88,38 +88,27 @@ class TestOnPermissionRequestHandler:
 
 @pytest.mark.sdk_assumption
 class TestSDKVersionCompatibility:
-    """Detect SDK version drift from v0.1.33 baseline."""
+    """Detect SDK version drift from v0.3.0 baseline."""
 
     def test_permission_request_result_has_kind_field(self) -> None:
-        """PermissionRequestResult must accept kind parameter (any supported SDK version).
+        """PermissionRequestResult must accept kind='reject' (SDK v0.3.0 API).
 
         # Contract: deny-destroy:PermissionRequest:MUST:2
 
-        v0.2.0: copilot.types.PermissionRequestResult
-        v0.2.1+: copilot.session.PermissionRequestResult (copilot.types deleted)
+        SDK v0.3.0: PermissionRequestResult is at copilot.session.
+        Only field: kind (PermissionRequestResultKind).
+        Valid kinds: 'approve-once' | 'reject' | 'user-not-available' | 'no-result'
         """
-        PermissionRequestResult = None
-        # Follow the same fallback chain as _imports.py
-        try:
-            from copilot.types import PermissionRequestResult  # type: ignore[import-untyped]
-        except ImportError:
-            try:
-                from copilot import PermissionRequestResult  # type: ignore[import-untyped,no-redef]
-            except ImportError:
-                from copilot.session import (  # type: ignore[import-untyped]
-                    PermissionRequestResult,  # type: ignore[no-redef]
-                )
-                # SDK is a hard dependency — ImportError propagates if all fail
+        from copilot.session import (  # type: ignore[import-untyped]
+            PermissionRequestResult,
+        )
 
-        assert isinstance(PermissionRequestResult, type), (  # pragma: no cover
-            "SDK installed but PermissionRequestResult not found in any fallback location"
+        assert isinstance(PermissionRequestResult, type), (
+            "SDK installed but PermissionRequestResult not found at copilot.session"
         )
 
         try:
-            result = PermissionRequestResult(  # type: ignore[misc]
-                kind="denied-by-rules",
-                message="Test denial",
-            )
-            assert result.kind == "denied-by-rules"  # type: ignore[union-attr]
+            result = PermissionRequestResult(kind="reject")  # type: ignore[misc]
+            assert result.kind == "reject"  # type: ignore[union-attr]
         except TypeError as e:
-            pytest.fail(f"PermissionRequestResult signature changed: {e}")
+            pytest.fail(f"PermissionRequestResult(kind='reject') failed: {e}")

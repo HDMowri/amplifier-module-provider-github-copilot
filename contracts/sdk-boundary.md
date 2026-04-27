@@ -1,11 +1,12 @@
 # Contract: SDK Boundary (The Membrane)
 
 ## Version
-- **Current:** 1.3 (SDK v0.2.1 Breaking Changes)
+- **Current:** 1.4 (SDK v0.3.0 — PermissionRequestResult field removal, kind rename)
 - **Module Reference:** amplifier_module_provider_github_copilot/sdk_adapter/
 - **Status:** Non-Negotiable Constraint
-- **Update:** 2026-04-04 — SDK v0.2.1: copilot.types deleted, PermissionRequestResult → copilot.session
+- **Update:** 2026-04-04 — SDK v0.3.0: PermissionRequestResult reduced to kind-only; kind values renamed
 - **History:**
+  - **1.4** — SDK v0.3.0: `PermissionRequestResult` fields `rules`/`feedback`/`message`/`path` removed; kind literals renamed (`denied-by-rules` → `reject`, etc.). Fallback chains collapsed to direct imports (`copilot` for SubprocessConfig, `copilot.session` for PermissionRequestResult). `make_permission_denied()` factory added to `_imports.py`; `client.py` now expresses intent only.
   - **1.3** — SDK v0.2.1: copilot/types.py deleted. Multi-level fallback required for any type that lived there.
   - **1.2** — SDK v0.2.0 API: SubprocessConfig, create_session kwargs, send(prompt)
 
@@ -29,9 +30,22 @@ This contract ensures the provider remains testable, maintainable, and isolated 
 3. **MUST NOT** allow SDK imports in ANY module outside `sdk_adapter/`
 4. **MUST NOT** export SDK types from `sdk_adapter/__init__.py`
 5. **MUST** fail at import time with a clear error if `github-copilot-sdk` is not installed (eager dependency check)
-6. **MUST** maintain multi-level fallback chains for any SDK type that has moved between versions: `copilot.types` (v0.2.0) → `copilot` root (potential re-export) → new canonical module (v0.2.1+) → `None`. This pattern is established by `SubprocessConfig` and `PermissionRequestResult` in `_imports.py`.
+6. **MUST** use direct imports for the currently pinned SDK version. Multi-level fallback chains are only needed when supporting a version range that spans a breaking import reorganisation. With `>=0.3.0,<0.4.0`, the canonical locations are: `SubprocessConfig` from `copilot` root, `PermissionRequestResult` from `copilot.session`. If an import moves in a future version, update the pin AND the import together.
+7. **MUST** encapsulate SDK constructor calls — including field names and Literal values — inside `_imports.py`. Other modules call factories (e.g., `make_permission_denied()`), not SDK constructors directly.
 
 ### SDK Version History (Import Changes)
+
+#### SDK v0.3.0 — `PermissionRequestResult` reduced to kind-only; kind literals renamed
+
+| Field | v0.2.2 | v0.3.0 |
+|-------|--------|--------|
+| `kind` | `"denied-by-rules"`, `"approved"`, … (6 values) | `"approve-once"`, `"reject"`, `"user-not-available"`, `"no-result"` |
+| `rules` | present | **removed** |
+| `feedback` | present | **removed** |
+| `message` | present | **removed** |
+| `path` | present | **removed** |
+
+`SubprocessConfig` added `session_idle_timeout_seconds: int | None` (optional, unused by provider).
 
 #### SDK v0.2.1 (2026-03-20) — `copilot.types` deleted (PR #871, brettcannon)
 
@@ -43,22 +57,6 @@ This contract ensures the provider remains testable, maintainable, and isolated 
 | `PermissionHandler` | `copilot.types` | `copilot.session` | No |
 | `SubprocessConfig` | `copilot.types` | `copilot.client` | **Yes** — `copilot.SubprocessConfig` works |
 | Tool types | `copilot.types` | `copilot.tools` | Yes |
-
-`copilot.__init__` now exports only: `CopilotClient`, `CopilotSession`, connection configs, `define_tool`.
-
-**Required fallback pattern** (established in `_imports.py`):
-```python
-try:
-    from copilot.types import X  # v0.2.0
-except ImportError:
-    try:
-        from copilot import X    # potential root re-export
-    except ImportError:
-        try:
-            from copilot.NEW_MODULE import X  # v0.2.1+ canonical location
-        except ImportError:
-            X = None  # pre-existence stub
-```
 
 ### Directory Structure
 
@@ -459,7 +457,8 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 
 | Anchor | Clause |
 |--------|--------|
-| `sdk-boundary:ImportQuarantine:MUST:6` | Multi-level fallback chains for SDK types that moved between versions |
+| `sdk-boundary:ImportQuarantine:MUST:6` | Direct imports for pinned SDK version — no fallback chains (SubprocessConfig from copilot root, PermissionRequestResult from copilot.session) |
+| `sdk-boundary:ImportQuarantine:MUST:7` | SDK constructor calls encapsulated in _imports.py via factory (make_permission_denied); client.py expresses intent only |
 
 ### Types
 
@@ -726,6 +725,19 @@ The provider MUST locate and execute the Copilot CLI binary across all supported
 6. **MUST** set execute permission (`S_IXUSR|S_IXGRP`, NOT `S_IXOTH`) on Unix
 7. **MUST** be no-op for permissions on Windows
 8. **MUST** raise if binary not found (mount() signals failure, not opt-out)
+9. **MUST** verify execute permission persisted (post-`chmod` `stat()`) and fail
+   with `ProviderUnavailableError` BEFORE subprocess launch when the filesystem
+   silently discards mode bits (e.g. NTFS via WSL `/mnt/` without DrvFs
+   `metadata`, some FUSE drivers, network-share mounts). Diagnostic message
+   MUST be platform-aware (WSL hint vs generic Unix hint vs Windows defensive)
+   and MUST include the binary path for actionability.
+10. **MUST** preserve typed amplifier-core errors (`ConfigurationError`,
+    `ProviderUnavailableError`) raised inside the session-creation try block —
+    they MUST NOT be re-translated by the catchall `Exception` handler.
+    Rationale: the catchall translator is for raw SDK/OS exceptions; typed
+    amplifier-core errors carry intentional fail-closed / routing semantics
+    (Security P1-6, error-class-based orchestrator retry) that re-translation
+    would silently destroy.
 
 ### Test Anchors
 
@@ -739,6 +751,8 @@ The provider MUST locate and execute the Copilot CLI binary across all supported
 | `sdk-boundary:BinaryResolution:MUST:6` | Execute permission |
 | `sdk-boundary:BinaryResolution:MUST:7` | Windows no-op |
 | `sdk-boundary:BinaryResolution:MUST:8` | Raises if binary not found (mount() failure, not opt-out) |
+| `sdk-boundary:BinaryResolution:MUST:9` | Verified execute permission + platform-aware diagnostic |
+| `sdk-boundary:BinaryResolution:MUST:10` | Typed amplifier-core errors not re-translated |
 
 ---
 

@@ -101,3 +101,34 @@ class TestWSLDetection:
         assert info.is_windows is False
         assert info.name == "Unix"
         assert info.cli_binary_name == "copilot"
+
+    def test_oserror_on_proc_version_defaults_is_wsl_false(self) -> None:
+        """OSError on /proc/version (e.g. minimal container, non-Linux Unix)
+        falls through to is_wsl=False rather than crashing.
+
+        Removes the # pragma: no cover that previously hid this path.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:1
+        """
+        from unittest.mock import patch
+
+        from amplifier_module_provider_github_copilot._platform import (
+            PlatformInfo,
+            get_platform_info,
+        )
+
+        get_platform_info.cache_clear()
+
+        with (
+            patch("sys.platform", "linux"),
+            patch("builtins.open", side_effect=OSError("ENOENT: /proc/version")),
+        ):
+            info = get_platform_info()
+
+        get_platform_info.cache_clear()
+
+        assert isinstance(info, PlatformInfo)
+        assert info.is_wsl is False, "OSError fallback must default is_wsl to False"
+        assert info.is_windows is False
+        assert info.name == "Unix"
+        assert info.cli_binary_name == "copilot"

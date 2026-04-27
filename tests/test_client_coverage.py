@@ -221,13 +221,14 @@ class TestDenyPermissionRequestHappyPath:
     """deny_permission_request() returns PermissionRequestResult when SDK types available."""
 
     def test_returns_permission_request_result_when_sdk_available(self) -> None:
-        """deny_permission_request returns PermissionRequestResult when SDK >= 0.1.28.
+        """deny_permission_request returns PermissionRequestResult when SDK >= 0.3.0.
 
         Contract: deny-destroy:PermissionRequest:MUST:2
-        Line 97 in sdk_adapter/client.py — PermissionRequestResult branch
 
         In test mode (SKIP_SDK_CHECK=1), _imports.PermissionRequestResult is None.
-        Patching it to a real class exercises the if-branch at line 96-100.
+        Patching it to a real class exercises the if-branch in make_permission_denied().
+
+        SDK v0.3.0: PermissionRequestResult(kind=...) — kind-only, no message field.
         """
         from unittest.mock import MagicMock, patch
 
@@ -236,11 +237,10 @@ class TestDenyPermissionRequestHappyPath:
         )
 
         class _MockPermissionRequestResult:
-            """Minimal stand-in for SDK PermissionRequestResult."""
+            """Minimal stand-in for SDK v0.3.0 PermissionRequestResult (kind-only)."""
 
-            def __init__(self, *, kind: str, message: str) -> None:
+            def __init__(self, *, kind: str) -> None:
                 self.kind = kind
-                self.message = message
 
         mock_request = MagicMock(spec=object)  # Minimal spec — permission request arg is unused
 
@@ -251,5 +251,4 @@ class TestDenyPermissionRequestHappyPath:
             result = deny_permission_request(mock_request)
 
         assert isinstance(result, _MockPermissionRequestResult)
-        assert result.kind == "denied-by-rules"
-        assert result.message == "Amplifier orchestrator controls all operations"
+        assert result.kind == "reject"

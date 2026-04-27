@@ -67,6 +67,19 @@ def ensure_executable(path: Path) -> bool:
         new_mode = current_mode | _EXECUTE_BITS
         path.chmod(new_mode)
 
+        # Verify chmod actually applied. On NTFS mounts surfaced via WSL
+        # (/mnt/<drive>/) and some FUSE filesystems, chmod returns success but
+        # silently no-ops. Re-stat to detect that case so callers get an
+        # honest answer rather than a false-positive True.
+        verified_mode = path.stat().st_mode
+        if not (verified_mode & stat.S_IXUSR):
+            logger.warning(
+                "[PERMISSIONS] chmod did not persist "
+                "(filesystem may not support POSIX mode bits): %s",
+                path,
+            )
+            return False
+
         logger.debug("[PERMISSIONS] Added execute permission: %s", path)
         return True
 

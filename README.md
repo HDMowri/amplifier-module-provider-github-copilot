@@ -127,12 +127,13 @@ amplifier provider models github-copilot
 
 ## Supported Models
 
-Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current set as of SDK 0.2.2; run `amplifier provider models github-copilot` for the live list.
+Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current set as of SDK 0.3.0; run `amplifier provider models github-copilot` for the live list.
 
 **Anthropic:**
 
 | Model ID | Context | Max Output | Capabilities |
 | --- | --- | --- | --- |
+| `claude-opus-4.7` | 200k | 32k | streaming, tools, vision, thinking |
 | `claude-sonnet-4.6` | 200k | 32k | streaming, tools, vision, thinking |
 | `claude-sonnet-4.5` | 200k | 32k | streaming, tools, vision |
 | `claude-haiku-4.5` | 200k | 64k | streaming, tools, vision |
@@ -145,11 +146,11 @@ Models are discovered dynamically from the SDK at runtime — the list reflects 
 
 | Model ID | Context | Max Output | Capabilities |
 | --- | --- | --- | --- |
+| `gpt-5.5` | 400k | 128k | streaming, tools, vision, thinking |
 | `gpt-5.4` | 400k | 128k | streaming, tools, vision, thinking |
 | `gpt-5.3-codex` | 400k | 128k | streaming, tools, vision, thinking |
 | `gpt-5.2-codex` | 400k | 128k | streaming, tools, vision, thinking |
 | `gpt-5.2` | 400k | 128k | streaming, tools, vision, thinking |
-| `gpt-5.1` | 264k | 136k | streaming, tools, vision, thinking |
 | `gpt-5.4-mini` | 400k | 128k | streaming, tools, vision, thinking |
 | `gpt-5-mini` | 264k | 136k | streaming, tools, vision, thinking |
 | `gpt-4.1` | 128k | 64k | streaming, tools, vision |
@@ -503,7 +504,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk>=0.2.0,<0.3.0`
+- `github-copilot-sdk>=0.3.0,<0.4.0`
 - `pyyaml>=6.0`
 
 > **Note:** `github-copilot-sdk` is installed automatically when you install or initialize

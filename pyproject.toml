@@ -23,8 +23,9 @@ classifiers = [
 
 dependencies = [
     # GitHub Copilot SDK
-    # - v0.2.0: Breaking changes - SubprocessConfig, send(prompt, attachments=...)
-    "github-copilot-sdk>=0.2.0,<0.3.0",
+    # - v0.2.0: SubprocessConfig, send(prompt, attachments=...)
+    # - v0.3.0: PermissionRequestResult reduced to kind-only; kind values renamed
+    "github-copilot-sdk>=0.3.0,<0.4.0",
     # PyYAML for config loading
     "pyyaml>=6.0",
     # Note: amplifier-core is provided by Amplifier runtime when module is loaded
@@ -44,7 +45,12 @@ dev = [
     "pytest-asyncio>=0.21",
     "pytest-cov>=7.0.0",
     # amplifier-core from PyPI (binary wheels, no Rust compilation needed)
-    "amplifier-core>=1.0.7",
+    # Floor bumped from 1.0.7 → 1.3.0 to align with the runtime version actually
+    # injected by the Amplifier CLI (1.4.x). The 1.0.7 floor predated several
+    # kernel iterations and was no longer representative of the tested surface.
+    # Note: amplifier-core public message_models are byte-identical across
+    # 1.2.6→1.4.1; the bump reflects policy alignment, not new field usage.
+    "amplifier-core>=1.3.0",
 ]
 
 [project.entry-points."amplifier.modules"]
