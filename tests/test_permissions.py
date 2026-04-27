@@ -47,6 +47,47 @@ class TestEnsureExecutableErrors:
 
         assert result is False
 
+    def test_chmod_silent_noop_returns_false(self, tmp_path: Path) -> None:
+        """chmod that silently succeeds without applying mode (NTFS/FUSE behavior)
+        causes the function to return False instead of a misleading True.
+
+        Reproduces the cross-platform blind spot where /mnt/<drive>/ on WSL
+        accepts chmod() without persisting the mode bits.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:6
+        """
+        from amplifier_module_provider_github_copilot._permissions import ensure_executable
+        from amplifier_module_provider_github_copilot._platform import get_platform_info
+
+        binary = tmp_path / "copilot"
+        binary.touch()
+        binary.chmod(0o644)  # Not executable
+
+        get_platform_info.cache_clear()
+        unix_info = self._unix_platform_info()
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot._platform.get_platform_info",
+                return_value=unix_info,
+            ),
+            # Simulate NTFS-on-WSL: chmod returns success but does not persist.
+            patch(
+                "amplifier_module_provider_github_copilot._permissions.Path.chmod",
+                return_value=None,
+            ),
+        ):
+            result = ensure_executable(binary)
+
+        # Sanity: behavioral assertion — file mode actually unchanged on disk.
+        assert not (binary.stat().st_mode & __import__("stat").S_IXUSR), (
+            "test premise: chmod was suppressed, mode should be unchanged"
+        )
+        assert result is False, (
+            "ensure_executable must return False when chmod silently no-ops; "
+            "returning True would lie to callers about NTFS-mounted binaries"
+        )
+
     def test_os_error_on_chmod_returns_false(self, tmp_path: Path) -> None:
         """L74-76: OSError from chmod returns False.
 

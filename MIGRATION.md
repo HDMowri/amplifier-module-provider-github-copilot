@@ -15,7 +15,7 @@ symbols that were previously exposed as implementation details.
 - Internal classes removed from public API (they were never intended for external use)
 - SDK authentication types removed (SDK v0.2.0 changed authentication patterns)
 - `ModelIdPattern` removed — use model name strings directly
-- SDK dependency: `github-copilot-sdk>=0.1.32,<0.2.0` → `>=0.2.0,<0.3.0`
+- SDK dependency: `github-copilot-sdk>=0.1.32,<0.2.0` → `>=0.2.0,<0.3.0` → `>=0.3.0,<0.4.0`
 
 ---
 

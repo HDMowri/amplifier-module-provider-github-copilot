@@ -29,6 +29,7 @@ class SubprocessConfig:
     github_token: str | None = None
     use_logged_in_user: bool | None = None
     telemetry: TelemetryConfig | None = None
+    session_idle_timeout_seconds: int | None = None
 
 
 @dataclass
@@ -38,12 +39,16 @@ class BlobAttachment:
     media_type: str
 
 
+PermissionRequestResultKind = Literal[
+    "approve-once", "reject", "user-not-available", "no-result"
+]
+
+
 @dataclass
 class PermissionRequestResult:
-    """Result of a permission request."""
-    kind: str
-    allowed: bool = True
-    message: str | None = None
+    """Result of a permission request (SDK v0.3.0: kind-only)."""
+
+    kind: PermissionRequestResultKind = "user-not-available"
 
 
 @dataclass

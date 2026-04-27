@@ -5,13 +5,13 @@ Contract: contracts/deny-destroy.md
 
 Test Anchors:
 - deny-destroy:PermissionRequest:MUST:1 — on_permission_request handler installed
-- deny-destroy:PermissionRequest:MUST:2 — handler returns kind="denied-by-rules"
+- deny-destroy:PermissionRequest:MUST:2 — handler returns kind="reject"
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -98,13 +98,16 @@ class TestPermissionRequestHandlerInstalled:
 
 
 class TestPermissionRequestDenial:
-    """deny-destroy:PermissionRequest:MUST:2 — handler returns kind="denied-by-rules"."""
+    """deny-destroy:PermissionRequest:MUST:2 — handler returns kind="reject"."""
 
-    def test_deny_permission_request_returns_denied_by_rules(self) -> None:
-        """deny-destroy:PermissionRequest:MUST:2 — handler returns denied-by-rules.
+    def test_deny_permission_request_returns_reject(self) -> None:
+        """deny-destroy:PermissionRequest:MUST:2 — handler returns reject.
 
         The deny_permission_request function must return a result with
-        kind="denied-by-rules" to deny all permission requests at source.
+        kind="reject" to deny all permission requests at source.
+
+        SDK v0.3.0: PermissionRequestResultKind values are
+        'approve-once' | 'reject' | 'user-not-available' | 'no-result'.
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             deny_permission_request,
@@ -116,22 +119,8 @@ class TestPermissionRequestDenial:
         # Handle both PermissionRequestResult object and dict fallback
         # (dict fallback used when SDK not installed, e.g., SKIP_SDK_CHECK=true)
         kind = result.kind if hasattr(result, "kind") else result.get("kind")
-        assert kind == "denied-by-rules", (
-            f"PermissionRequest:MUST:2 — kind must be 'denied-by-rules', got {kind!r}"
-        )
-
-    def test_deny_permission_request_has_message(self) -> None:
-        """deny-destroy:PermissionRequest:MUST:2 — handler includes denial message."""
-        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
-            deny_permission_request,
-        )
-
-        result = deny_permission_request(None)
-
-        # Handle both object and dict format
-        message = result.message if hasattr(result, "message") else result.get("message")
-        assert isinstance(message, str) and "Amplifier" in message, (
-            f"PermissionRequest:MUST:2 — denial must include a message mentioning Amplifier, got {message!r}"
+        assert kind == "reject", (
+            f"PermissionRequest:MUST:2 — kind must be 'reject', got {kind!r}"
         )
 
     def test_deny_permission_request_with_request_object(self) -> None:
@@ -148,8 +137,41 @@ class TestPermissionRequestDenial:
         result = deny_permission_request(mock_request)
 
         kind = result.kind if hasattr(result, "kind") else result.get("kind")
-        assert kind == "denied-by-rules", (
+        assert kind == "reject", (
             f"PermissionRequest:MUST:2 — must deny regardless of request content, got {kind!r}"
+        )
+
+
+class TestPermissionRequestDelegation:
+    """deny-destroy:PermissionRequest:MUST:2 — deny_permission_request delegates to factory.
+
+    Contract: sdk-boundary:ImportQuarantine:MUST:7
+    """
+
+    def test_deny_permission_request_delegates_to_make_permission_denied(self) -> None:
+        """deny_permission_request MUST delegate entirely to make_permission_denied.
+
+        Monkeypatches make_permission_denied and verifies the return value flows
+        through unchanged. SDK constructor field knowledge must stay in _imports.py,
+        not be duplicated in client.py.
+
+        # Contract: deny-destroy:PermissionRequest:MUST:2
+        # Contract: sdk-boundary:ImportQuarantine:MUST:7
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            deny_permission_request,
+        )
+
+        sentinel = object()
+        with patch(
+            "amplifier_module_provider_github_copilot.sdk_adapter._imports.make_permission_denied",
+            return_value=sentinel,
+        ):
+            result = deny_permission_request(None)
+
+        assert result is sentinel, (
+            "deny_permission_request must delegate entirely to make_permission_denied — "
+            "SDK constructor knowledge must stay in _imports.py"
         )
 
 
@@ -161,7 +183,7 @@ class TestPermissionHandlerIsDenyPermissionRequest:
         """deny-destroy:PermissionRequest:MUST:1,2 — handler IS deny_permission_request.
 
         The handler installed in create_session kwargs must be the actual
-        deny_permission_request function that returns denied-by-rules.
+        deny_permission_request function that returns kind="reject".
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,

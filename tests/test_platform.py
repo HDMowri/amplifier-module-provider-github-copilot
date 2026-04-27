@@ -506,7 +506,7 @@ class TestPermissionRepair:
     @pytest.mark.xfail(
         __import__("sys").platform == "win32",
         reason="Unix permission tests require POSIX filesystem",
-        strict=False,
+        strict=True,
     )
     def test_already_executable_is_idempotent(self, tmp_path: Path) -> None:
         """Returns True without chmod if already executable.
@@ -544,7 +544,7 @@ class TestPermissionRepair:
     @pytest.mark.xfail(
         __import__("sys").platform == "win32",
         reason="Unix permission tests require POSIX filesystem",
-        strict=False,
+        strict=True,
     )
     def test_adds_execute_permission(self, tmp_path: Path) -> None:
         """Adds user+group execute permission.

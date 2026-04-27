@@ -51,43 +51,39 @@ else:
             "github-copilot-sdk not installed. Install with: pip install github-copilot-sdk"
         ) from e
 
-    # SDK v0.2.0: SubprocessConfig replaces options dict.
-    # SDK v0.2.1: copilot.types was removed; SubprocessConfig moved to copilot.client
-    # and re-exported from the copilot root package.
-    # Try copilot.types first (0.2.0), fall back to copilot root (0.2.1+).
-    try:
-        from copilot.types import SubprocessConfig  # type: ignore[import-untyped,no-redef]
-    except ImportError:
-        try:
-            from copilot import SubprocessConfig  # type: ignore[import-untyped,no-redef]
-        except ImportError:  # pragma: no cover — SDK 0.2.0 always has SubprocessConfig
-            SubprocessConfig = None  # type: ignore[misc,assignment]
+    # SDK v0.3.0: SubprocessConfig is at copilot root (re-exported from copilot.client).
+    from copilot import SubprocessConfig  # type: ignore[import-untyped,no-redef]
 
-    # PermissionRequestResult: multi-version fallback chain
-    # v0.2.0:  copilot.types.PermissionRequestResult
-    # v0.2.1+: copilot.types deleted (PR #871); moved to copilot.session
-    #          NOT re-exported from copilot root
-    # <0.1.28: did not exist yet
-    try:
-        from copilot.types import PermissionRequestResult  # type: ignore[import-untyped,no-redef]
-    except ImportError:
-        try:
-            from copilot import PermissionRequestResult  # type: ignore[import-untyped,no-redef]
-        except ImportError:
-            try:
-                from copilot.session import (  # type: ignore[import-untyped]
-                    PermissionRequestResult,  # type: ignore[no-redef]
-                )
-            except ImportError:
-                PermissionRequestResult = None  # type: ignore[misc,assignment]
+    # SDK v0.3.0: PermissionRequestResult is at copilot.session (canonical since v0.2.1).
+    from copilot.session import (  # type: ignore[import-untyped]
+        PermissionRequestResult,  # type: ignore[no-redef]
+    )
 
 # =============================================================================
 # Exports
 # =============================================================================
 
+
+def make_permission_denied() -> Any:
+    """Construct a PermissionRequestResult that rejects the permission request.
+
+    Encapsulates ALL SDK field knowledge so client.py expresses intent only.
+
+    SDK v0.3.0 API: PermissionRequestResult(kind=...) — single field.
+    SDK v0.3.0 valid kinds: 'approve-once' | 'reject' | 'user-not-available' | 'no-result'
+
+    Test mode (SKIP_SDK_CHECK=1): PermissionRequestResult is None; returns dict.
+    """
+    if PermissionRequestResult is not None:
+        return PermissionRequestResult(kind="reject")  # type: ignore[return-value]  # pragma: no cover
+    # Test mode only (SKIP_SDK_CHECK=1 sets PermissionRequestResult = None).
+    return {"kind": "reject"}
+
+
 __all__ = [
     "CopilotClient",
     "PermissionRequestResult",
     "SubprocessConfig",
+    "make_permission_denied",
     "get_copilot_spec_origin",  # Re-export from _spec_utils
 ]

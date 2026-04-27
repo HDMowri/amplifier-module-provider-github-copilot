@@ -374,18 +374,24 @@ class TestSdkVersionConsistency:
         SDK version. Uses _check_sdk_version() (extracted for testability) and
         importlib.metadata to verify message matches actual declared dependency.
         """
-        import importlib.metadata
         import re
+        import tomllib
+        from pathlib import Path
 
         from packaging.requirements import Requirement
         from packaging.specifiers import SpecifierSet
 
         from amplifier_module_provider_github_copilot import _check_sdk_version
 
-        # Get declared SDK requirement from package metadata
-        requires = importlib.metadata.requires("amplifier-module-provider-github-copilot") or []
-        sdk_req = next((r for r in requires if r.startswith("github-copilot-sdk")), None)
-        assert isinstance(sdk_req, str), "Package must declare github-copilot-sdk dependency"
+        # Read declared SDK requirement directly from pyproject.toml — more robust than
+        # importlib.metadata.requires() which finds whichever installed dist-info comes
+        # first on sys.path (may be a stale system-wide install, not this worktree).
+        pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
+        with open(pyproject_path, "rb") as f:
+            pyproject = tomllib.load(f)
+        deps: list[str] = pyproject["project"]["dependencies"]
+        sdk_req = next((r for r in deps if r.startswith("github-copilot-sdk")), None)
+        assert isinstance(sdk_req, str), "pyproject.toml must declare github-copilot-sdk dependency"
         metadata_specifier = SpecifierSet(str(Requirement(sdk_req).specifier))
 
         # Trigger the error with an old SDK version

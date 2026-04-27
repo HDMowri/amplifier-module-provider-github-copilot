@@ -1498,6 +1498,415 @@ class TestEnsureExecutableWiring:
             f"ensure_executable (pos {exe_idx}) must come before start() (pos {start_idx})"
         )
 
+    @pytest.mark.asyncio
+    async def test_ensure_executable_failure_raises_before_start(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When ensure_executable returns False (chmod silently no-oped on
+        NTFS-mounted /mnt/, FUSE, etc.), the wrapper MUST raise
+        ProviderUnavailableError before launching the subprocess.
+
+        Rationale: subprocess.exec() would surface an opaque OS EACCES error
+        two layers removed from the actual cause. The provider already knows
+        the cause one frame earlier — fail fast with a diagnostic message.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:6
+        """
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from amplifier_core.llm_errors import ProviderUnavailableError
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        call_order: list[str] = []
+        binary_path = Path("/mnt/d/copilot-bundle/bin/copilot")
+
+        def mock_locate_cli_binary() -> Path | None:
+            return binary_path
+
+        def mock_ensure_executable(path: Path) -> bool:
+            # Simulate NTFS-on-WSL: chmod "succeeded" but didn't persist.
+            call_order.append(f"ensure_executable:{path}")
+            return False
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                pass
+
+            async def start(self) -> None:
+                # MUST NOT be reached — we should raise before this.
+                call_order.append("start")
+
+            async def stop(self) -> None:
+                pass
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
+                mock_locate_cli_binary,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.ensure_executable",
+                mock_ensure_executable,
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
+            with pytest.raises(ProviderUnavailableError) as exc_info:
+                async with wrapper.session(model="gpt-4"):
+                    pass
+
+        # Behavioral assertions — every one must turn red if the fix is reverted.
+        assert "start" not in call_order, (
+            "subprocess MUST NOT be launched when ensure_executable returned False; "
+            f"call_order={call_order}"
+        )
+        assert f"ensure_executable:{binary_path}" in call_order, (
+            "ensure_executable must still be invoked"
+        )
+        msg = str(exc_info.value)
+        assert "execute" in msg.lower() or "permission" in msg.lower(), (
+            f"error message must mention execute/permission cause; got: {msg!r}"
+        )
+        assert str(binary_path) in msg, (
+            f"error message must include binary path for diagnosability; got: {msg!r}"
+        )
+        assert exc_info.value.provider == "github-copilot", (
+            "ProviderUnavailableError must carry provider tag for routing"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ensure_executable_failure_message_is_wsl_specific_on_wsl(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """On WSL, the error message MUST mention /mnt/ and DrvFs metadata —
+        the precise actionable cause for the most common trigger of this error.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:6
+        """
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from amplifier_core.llm_errors import ProviderUnavailableError
+
+        from amplifier_module_provider_github_copilot._platform import PlatformInfo
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        binary_path = Path("/mnt/d/copilot-bundle/bin/copilot")
+        wsl_info = PlatformInfo(
+            name="Unix", is_windows=False, is_wsl=True, cli_binary_name="copilot"
+        )
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                pass
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
+                lambda: binary_path,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.ensure_executable",
+                lambda _p: False,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.get_platform_info",
+                lambda: wsl_info,
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
+            with pytest.raises(ProviderUnavailableError) as exc_info:
+                async with wrapper.session(model="gpt-4"):
+                    pass
+
+        msg = str(exc_info.value)
+        assert "/mnt/" in msg, f"WSL message must mention /mnt/; got: {msg!r}"
+        assert "metadata" in msg.lower(), (
+            f"WSL message must mention DrvFs 'metadata' option; got: {msg!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ensure_executable_failure_message_is_generic_on_non_wsl(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """On non-WSL Unix (macOS, native Linux, containers), the message MUST
+        NOT use WSL-specific jargon. It must point to network shares / volume
+        mounts / FUSE — the actual triggers in those environments.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:6
+        """
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from amplifier_core.llm_errors import ProviderUnavailableError
+
+        from amplifier_module_provider_github_copilot._platform import PlatformInfo
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        binary_path = Path("/Users/dev/.local/copilot/bin/copilot")
+        macos_info = PlatformInfo(
+            name="Unix", is_windows=False, is_wsl=False, cli_binary_name="copilot"
+        )
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                pass
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
+                lambda: binary_path,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.ensure_executable",
+                lambda _p: False,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.get_platform_info",
+                lambda: macos_info,
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
+            with pytest.raises(ProviderUnavailableError) as exc_info:
+                async with wrapper.session(model="gpt-4"):
+                    pass
+
+        msg = str(exc_info.value)
+        assert "/mnt/" not in msg, (
+            f"non-WSL message must NOT mention WSL /mnt/ paths; got: {msg!r}"
+        )
+        assert "DrvFs" not in msg, (
+            f"non-WSL message must NOT mention WSL DrvFs; got: {msg!r}"
+        )
+        # Must point to the actual non-WSL triggers.
+        assert any(term in msg for term in ("NFS", "SMB", "CIFS", "FUSE", "network", "volume")), (
+            f"non-WSL message must mention network shares / volume mounts / FUSE; got: {msg!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_configuration_error_not_translated_to_unavailable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ConfigurationError raised inside the session-creation try block MUST
+        propagate as ConfigurationError, NOT be re-wrapped as
+        ProviderUnavailableError by the catchall translator.
+
+        Rationale: ConfigurationError signals "user misconfigured this" —
+        a fail-closed condition (Security P1-6) that orchestrators MUST NOT
+        treat as transient unavailability. Re-wrapping would change retry
+        semantics and obscure the user-facing fix.
+
+        Trigger path: explicit GITHUB_TOKEN env var + SDK SubprocessConfig
+        unavailable → fail-closed at client.py (token cannot be applied).
+
+        Contract: sdk-boundary:BinaryResolution:MUST:10
+        """
+        from unittest.mock import patch
+
+        from amplifier_core.llm_errors import ConfigurationError
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        class MockCopilotClient:
+            def __init__(self, config: Any = None) -> None:
+                pass
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token_p1_6_failclosed")
+
+        translate_calls: list[Exception] = []
+
+        def spy_translate(exc: Exception, _config: Any, **_kwargs: Any) -> Exception:
+            translate_calls.append(exc)
+            return ConfigurationError("translated", provider="github-copilot")
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
+                lambda: None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.error_translation.translate_sdk_error",
+                spy_translate,
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
+            with pytest.raises(ConfigurationError) as exc_info:
+                async with wrapper.session(model="gpt-4"):
+                    pass
+
+        # Core behavioral invariant: the translator MUST NOT have been invoked.
+        # If translate_sdk_error ran, the original ConfigurationError was caught
+        # by the catchall — even if the YAML mapping happens to round-trip the
+        # type back to ConfigurationError, that's fragile and loses the original
+        # message + cause chain.
+        assert translate_calls == [], (
+            f"translate_sdk_error MUST NOT be called for ConfigurationError; "
+            f"called with: {translate_calls!r}"
+        )
+        assert type(exc_info.value) is ConfigurationError, (
+            f"must propagate as ConfigurationError, not re-wrapped; "
+            f"got: {type(exc_info.value).__name__}"
+        )
+        # Verify the ORIGINAL message survived (proves no re-wrapping).
+        assert "failing closed" in str(exc_info.value).lower(), (
+            f"original Security P1-6 message must survive; got: {exc_info.value!s}"
+        )
+        assert exc_info.value.provider == "github-copilot"
+
+    @pytest.mark.asyncio
+    async def test_ensure_executable_failure_clears_owned_client_for_retry(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When ensure_executable fails and we raise, the constructed-but-never-
+        started CopilotClient MUST be cleared so the NEXT call to session() /
+        list_models() retries initialization rather than returning a stale
+        unstarted client via the double-check locking.
+
+        Without this guard, the first request gets the diagnostic error, but
+        every subsequent request silently returns a never-started client and
+        fails opaquely deep inside create_session() — defeating the whole
+        purpose of the fail-fast diagnostic.
+
+        Contract: sdk-boundary:BinaryResolution:MUST:9
+        """
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from amplifier_core.llm_errors import ProviderUnavailableError
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        binary_path = Path("/mnt/d/copilot-bundle/bin/copilot")
+
+        class MockCopilotClient:
+            instances: list[Any] = []
+
+            def __init__(self, config: Any = None) -> None:
+                MockCopilotClient.instances.append(self)
+                self.started = False
+
+            async def start(self) -> None:
+                self.started = True
+
+            async def stop(self) -> None:
+                pass
+
+        MockCopilotClient.instances = []
+
+        with (
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
+                None,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
+                lambda: binary_path,
+            ),
+            patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter.client.ensure_executable",
+                lambda _p: False,
+            ),
+        ):
+            wrapper = CopilotClientWrapper()
+
+            with pytest.raises(ProviderUnavailableError):
+                async with wrapper.session(model="gpt-4"):
+                    pass
+
+            # Critical invariant: _owned_client must be cleared. Otherwise the
+            # next call hits the double-check locking and returns a stale,
+            # never-started client.
+            assert wrapper._owned_client is None, (
+                f"_owned_client MUST be cleared after ensure_executable failure; "
+                f"got: {wrapper._owned_client!r}"
+            )
+
+            # Second attempt MUST raise diagnostic error (not silently return
+            # stale client). Confirms retry path works.
+            with pytest.raises(ProviderUnavailableError):
+                async with wrapper.session(model="gpt-4"):
+                    pass
+
+            # Two CopilotClient instances must have been constructed (one per
+            # retry), proving the lazy-init path was re-entered, not skipped.
+            assert len(MockCopilotClient.instances) == 2, (
+                f"second attempt must re-enter init; "
+                f"got {len(MockCopilotClient.instances)} construction(s)"
+            )
+            assert not any(c.started for c in MockCopilotClient.instances), (
+                "no CopilotClient should have been started"
+            )
+
 
 class TestSingletonLock:
     """The module-level singleton lock must be threading.Lock, not asyncio.Lock.
