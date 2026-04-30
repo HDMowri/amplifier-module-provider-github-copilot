@@ -85,7 +85,9 @@ from .provider import GitHubCopilotProvider  # noqa: E402
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
 from .sdk_adapter import AUTH_ENV_VARS, CopilotClientWrapper  # noqa: E402
 
-__version__ = "2.0.0"
+# Contract: provider-protocol:public_api:MUST:1 — must match pyproject.toml [project].version
+# Verified by tests/test_behaviors.py::TestPackageVersionConsistency
+__version__ = "2.1.0"
 
 # Amplifier module metadata
 __amplifier_module_type__ = "provider"
