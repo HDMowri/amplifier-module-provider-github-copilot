@@ -37,12 +37,16 @@ _SKIP_SDK_CHECK = os.environ.get("SKIP_SDK_CHECK") and is_pytest_running()
 CopilotClient: Any
 PermissionRequestResult: Any
 SubprocessConfig: Any
+ModelCapabilitiesOverride: Any
+ModelLimitsOverride: Any
 
 if _SKIP_SDK_CHECK:
     # Test mode: provide None stubs that tests can mock
     CopilotClient = None  # type: ignore[misc,assignment]
     PermissionRequestResult = None  # type: ignore[misc,assignment]
     SubprocessConfig = None  # type: ignore[misc,assignment]
+    ModelCapabilitiesOverride = None  # type: ignore[misc,assignment]
+    ModelLimitsOverride = None  # type: ignore[misc,assignment]
 else:
     try:
         from copilot import CopilotClient  # type: ignore[import-untyped,no-redef]
@@ -52,7 +56,14 @@ else:
         ) from e
 
     # SDK v0.3.0: SubprocessConfig is at copilot root (re-exported from copilot.client).
-    from copilot import SubprocessConfig  # type: ignore[import-untyped,no-redef]
+    # SDK v0.3.0: per-session capability overrides (e.g. max_output_tokens cap).
+    # Used by client.session() to honor ChatRequest.max_tokens.
+    # Contract: provider-protocol:complete:MUST:10
+    from copilot import (  # type: ignore[import-untyped,no-redef]
+        ModelCapabilitiesOverride,
+        ModelLimitsOverride,
+        SubprocessConfig,  # type: ignore[import-untyped,no-redef]
+    )
 
     # SDK v0.3.0: PermissionRequestResult is at copilot.session (canonical since v0.2.1).
     from copilot.session import (  # type: ignore[import-untyped]
@@ -82,6 +93,8 @@ def make_permission_denied() -> Any:
 
 __all__ = [
     "CopilotClient",
+    "ModelCapabilitiesOverride",
+    "ModelLimitsOverride",
     "PermissionRequestResult",
     "SubprocessConfig",
     "make_permission_denied",

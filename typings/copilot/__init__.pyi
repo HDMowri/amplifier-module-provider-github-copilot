@@ -61,4 +61,45 @@ class CopilotSession:
     async def __aexit__(self, *args: Any) -> None: ...
 
 
-__all__ = ["CopilotClient", "CopilotSession"]
+class ModelLimitsOverride:
+    """Per-session token limit overrides (SDK v0.3.0).
+
+    Forwarded by the provider to honor ChatRequest.max_tokens via
+    ModelCapabilitiesOverride.limits.max_output_tokens.
+    """
+
+    max_prompt_tokens: int | None
+    max_output_tokens: int | None
+    max_context_window_tokens: int | None
+    vision: Any | None
+
+    def __init__(
+        self,
+        *,
+        max_prompt_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        max_context_window_tokens: int | None = None,
+        vision: Any | None = None,
+    ) -> None: ...
+
+
+class ModelCapabilitiesOverride:
+    """Per-session capability overrides (SDK v0.3.0)."""
+
+    supports: Any | None
+    limits: ModelLimitsOverride | None
+
+    def __init__(
+        self,
+        *,
+        supports: Any | None = None,
+        limits: ModelLimitsOverride | None = None,
+    ) -> None: ...
+
+
+__all__ = [
+    "CopilotClient",
+    "CopilotSession",
+    "ModelCapabilitiesOverride",
+    "ModelLimitsOverride",
+]

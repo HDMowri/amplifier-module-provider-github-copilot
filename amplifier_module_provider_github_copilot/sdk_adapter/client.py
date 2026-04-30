@@ -395,8 +395,7 @@ class CopilotClientWrapper:
                             "POSIX permission support."
                         )
                     raise ProviderUnavailableError(
-                        f"Cannot set execute permission on Copilot binary at {binary_path}. "
-                        f"{hint}",
+                        f"Cannot set execute permission on Copilot binary at {binary_path}. {hint}",
                         provider="github-copilot",
                     )
 
@@ -459,6 +458,7 @@ class CopilotClientWrapper:
         *,
         system_message: str | None = None,
         tools: list[Any] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[SessionHandle]:
         """Create an ephemeral session with proper cleanup.
 
@@ -475,6 +475,10 @@ class CopilotClientWrapper:
                    Accepts dicts with 'name', 'description', 'parameters' keys
                    or objects with those attributes (e.g., amplifier_core.ToolSpec).
                    Contract: sdk-boundary:ToolForwarding:MUST:1
+            max_tokens: Optional per-session output token cap. When provided
+                        (not None), forwarded to SDK as
+                        ``model_capabilities=ModelCapabilitiesOverride(...)``.
+                        Contract: provider-protocol:complete:MUST:10
 
         Yields:
             Raw SDK session (opaque Any)
@@ -540,6 +544,25 @@ class CopilotClientWrapper:
         # Contract: sdk-boundary:MinimalMode:MUST:1-6
         # Disable SDK features Amplifier handles. Evidence: 57% wall-clock improvement.
         session_config.update(_minimal_mode_session_config())
+
+        # Contract: provider-protocol:complete:MUST:10
+        # Forward kernel ChatRequest.max_output_tokens (mapped onto the internal
+        # CompletionRequest.max_tokens by request_adapter.convert_chat_request)
+        # as a per-session output token cap via SDK v0.3.0's
+        # ModelCapabilitiesOverride. The provider creates an ephemeral session
+        # per call (deny-destroy contract), so a per-session cap is effectively
+        # per-call. SDK types are looked up via the _imports membrane at call
+        # time so test fixtures can patch them.
+        if max_tokens is not None:
+            from . import _imports
+
+            session_config["model_capabilities"] = _imports.ModelCapabilitiesOverride(
+                limits=_imports.ModelLimitsOverride(max_output_tokens=max_tokens),
+            )
+            logger.debug(
+                "[CLIENT] Forwarding max_tokens=%d via model_capabilities",
+                max_tokens,
+            )
 
         sdk_session = None
         try:

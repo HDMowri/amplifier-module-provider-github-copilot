@@ -400,6 +400,16 @@ class StreamingAccumulator:
             # the accumulator normalizes here in case raw SDK values pass through directly.
             normalized_finish_reason = self.finish_reason.lower()
 
+        # streaming-contract:FinishReason:MUST:6 — surface SDK truncation as WARN so
+        # downstream consumers don't silently see a partial response with status=ok.
+        if normalized_finish_reason == "length":
+            output_tokens = usage.output_tokens if usage is not None else None
+            logger.warning(
+                "[STREAMING] Response truncated by SDK output token limit: "
+                "finish_reason=length, output_tokens=%s",
+                output_tokens if output_tokens is not None else "unknown",
+            )
+
         # Contract: content_blocks is None when empty (not empty list)
         # streaming-contract:StreamingResponse:MUST:4
         return StreamingChatResponse(

@@ -24,7 +24,9 @@ class SessionConfig:
     Field Mapping (this dataclass -> SDK session config):
     - model -> session_config["model"]
     - system_prompt -> session_config["system_message"]["content"] (with mode="replace")
-    - max_tokens -> (not currently passed to SDK; reserved for future use)
+    - max_tokens -> model_capabilities=ModelCapabilitiesOverride(
+                       limits=ModelLimitsOverride(max_output_tokens=N)
+                   ) in create_session (SDK v0.3.0+)
 
     See client.py:session() for the actual SDK session config construction.
 

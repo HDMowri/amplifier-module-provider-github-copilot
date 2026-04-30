@@ -234,12 +234,19 @@ def convert_chat_request(
     # CRITICAL: Without system_message, SDK uses default persona instead of bundle
     system_message = extract_system_message(request)
 
+    # Extract max_output_tokens (per-session output cap, forwarded via SDK
+    # ModelCapabilitiesOverride). Contract: provider-protocol:complete:MUST:10
+    # NOTE: The canonical kernel field name is max_output_tokens (ChatRequest),
+    # not max_tokens. Both Anthropic and OpenAI providers use request.max_output_tokens.
+    max_tokens = getattr(request, "max_output_tokens", None)
+
     return CompletionRequest(
         prompt=prompt,
         model=model,
         tools=tools,
         attachments=attachments,
         system_message=system_message,
+        max_tokens=max_tokens,
     )
 
 
@@ -599,6 +606,9 @@ def build_request_payload_for_observability(
         "message_count": len(getattr(request, "messages", [])),
         "tool_names": tool_names,
         "has_system_message": bool(sys_msg),
+        # Correlates llm:request with truncation WARNING in streaming (finish_reason=length).
+        # None when caller did not set max_output_tokens.
+        "max_output_tokens": internal_request.max_tokens,
         # Debug fields (Contract: observability:Debug:MUST:1/2/3)
         # These are the reason raw=true exists: actual schemas, not just names.
         "tool_schemas": tool_schemas,
