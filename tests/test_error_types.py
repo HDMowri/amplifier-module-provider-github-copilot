@@ -246,6 +246,3 @@ class TestF035EdgeCases:
         result = translate_fn(exc, error_config)
         assert isinstance(result, LLMTimeoutError)
         assert result.retryable is True
-
-
-

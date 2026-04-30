@@ -152,6 +152,3 @@ class TestPermissionRequestResultV030Schema:
                 f"PermissionRequestResult exposes legacy v0.2.x field '{forbidden}'. "
                 "v0.3.0 reduced the surface to kind-only — SDK regressed."
             )
-
-
-

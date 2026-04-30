@@ -163,9 +163,18 @@ class TestSDKImportsRealPath:
             os.environ.pop("SKIP_SDK_CHECK", None)
 
             mock_prr = MagicMock(name="PermissionRequestResult")
-            mock_copilot = MagicMock(spec=["CopilotClient", "SubprocessConfig"])
+            mock_copilot = MagicMock(
+                spec=[
+                    "CopilotClient",
+                    "SubprocessConfig",
+                    "ModelCapabilitiesOverride",
+                    "ModelLimitsOverride",
+                ]
+            )
             mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
             mock_copilot.SubprocessConfig = MagicMock(name="SubprocessConfig")
+            mock_copilot.ModelCapabilitiesOverride = MagicMock(name="ModelCapabilitiesOverride")
+            mock_copilot.ModelLimitsOverride = MagicMock(name="ModelLimitsOverride")
 
             mock_copilot_session = MagicMock(spec=["PermissionRequestResult"])
             mock_copilot_session.PermissionRequestResult = mock_prr
@@ -204,9 +213,18 @@ class TestSDKImportsRealPath:
             os.environ.pop("SKIP_SDK_CHECK", None)
 
             mock_subprocess_config = MagicMock(name="SubprocessConfig")
-            mock_copilot = MagicMock(spec=["CopilotClient", "SubprocessConfig"])
+            mock_copilot = MagicMock(
+                spec=[
+                    "CopilotClient",
+                    "SubprocessConfig",
+                    "ModelCapabilitiesOverride",
+                    "ModelLimitsOverride",
+                ]
+            )
             mock_copilot.CopilotClient = MagicMock(name="CopilotClient")
             mock_copilot.SubprocessConfig = mock_subprocess_config
+            mock_copilot.ModelCapabilitiesOverride = MagicMock(name="ModelCapabilitiesOverride")
+            mock_copilot.ModelLimitsOverride = MagicMock(name="ModelLimitsOverride")
 
             mock_copilot_session = MagicMock(spec=["PermissionRequestResult"])
             mock_copilot_session.PermissionRequestResult = MagicMock(name="PermissionRequestResult")
@@ -249,9 +267,7 @@ class TestSDKConstructorEncapsulation:
         content = IMPORTS_FILE.read_text(encoding="utf-8")
         tree = ast.parse(content)
 
-        function_names = [
-            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-        ]
+        function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
         assert "make_permission_denied" in function_names, (
             "ImportQuarantine:MUST:7 — _imports.py must define make_permission_denied factory"
         )

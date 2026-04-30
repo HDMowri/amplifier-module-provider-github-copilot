@@ -210,6 +210,7 @@ class TestE2ECompletionWithRealisticData:
             model: str,
             tools: list[dict[str, Any]] | None = None,
             system_message: str | None = None,
+            max_tokens: int | None = None,
         ):
             # Use correct SDK API pattern (send + on)
             mock_session = MagicMock(spec=_SessionSpec)

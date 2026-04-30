@@ -52,6 +52,7 @@ def _make_request(*, tools: list[Any] | None = None) -> MagicMock:
     request.model = "gpt-4o"
     request.tools = tools
     request.attachments = None
+    request.max_output_tokens = None
     return request
 
 
@@ -130,6 +131,7 @@ class CountingSessionWrapper:
         *,
         system_message: str | None = None,
         tools: list[Any] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[MockSDKSession]:
         """Each time session() is called, the same CancelOnSecondSendSession is used,
         but that session's send_count also increments for each send() call."""

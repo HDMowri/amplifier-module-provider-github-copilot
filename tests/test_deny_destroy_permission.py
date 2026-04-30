@@ -119,9 +119,7 @@ class TestPermissionRequestDenial:
         # Handle both PermissionRequestResult object and dict fallback
         # (dict fallback used when SDK not installed, e.g., SKIP_SDK_CHECK=true)
         kind = result.kind if hasattr(result, "kind") else result.get("kind")
-        assert kind == "reject", (
-            f"PermissionRequest:MUST:2 — kind must be 'reject', got {kind!r}"
-        )
+        assert kind == "reject", f"PermissionRequest:MUST:2 — kind must be 'reject', got {kind!r}"
 
     def test_deny_permission_request_with_request_object(self) -> None:
         """deny-destroy:PermissionRequest:MUST:2 — handler works with any request input."""

@@ -74,6 +74,7 @@ def create_mock_session_ctx(
         model: str,
         tools: list[dict[str, Any]] | None = None,
         system_message: str | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[MagicMock]:
         mock_session = MagicMock(spec=SessionHandle)
         mock_session.disconnect = AsyncMock(spec=_StubSDKSession.disconnect)

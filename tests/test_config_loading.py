@@ -199,6 +199,3 @@ class TestModelsYamlDefaultValues:
         assert config.defaults["model"] == "claude-opus-4.5"
         assert config.defaults["timeout"] == 3600
         assert config.defaults["context_window"] == 200000
-
-
-

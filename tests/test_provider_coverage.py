@@ -87,6 +87,7 @@ def _create_mock_request(model: str = "gpt-4o") -> MagicMock:
     request.model = model
     request.tools = None
     request.attachments = None
+    request.max_output_tokens = None  # canonical ChatRequest field (not max_tokens)
     return request
 
 
@@ -293,7 +294,10 @@ class TestErrorEventHandling:
         )
 
         mock_client = MockCopilotClientWrapper(events=[error_dict_event])
-        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+        # max_retries=0: this test exercises dict data parsing, not retry behaviour.
+        # "Rate limit exceeded" matches the retryable rate-limit pattern in errors.yaml;
+        # without disabling retries the test sleeps through asyncio.sleep() on Windows.
+        provider = GitHubCopilotProvider(client=mock_client, config={"max_retries": 0})  # type: ignore[arg-type]
         request = _create_mock_request()
 
         with pytest.raises(Exception, match="Rate limit"):
@@ -481,7 +485,6 @@ class TestToolCaptureAndAbort:
 # =============================================================================
 # Emit Helper Tests (Lines 795-827)
 # =============================================================================
-
 
 
 # =============================================================================

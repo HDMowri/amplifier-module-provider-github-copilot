@@ -493,6 +493,7 @@ class MockCopilotClientWrapper:
         *,
         system_message: str | None = None,
         tools: list[Any] | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[MockSDKSession]:
         """Create a mock session context manager.
 
@@ -502,6 +503,7 @@ class MockCopilotClientWrapper:
             model: Model ID (stored for assertions).
             system_message: System message (stored for assertions).
             tools: Tool definitions (stored for assertions).
+            max_tokens: Per-session output token cap (stored for assertions).
 
         Yields:
             MockSDKSession configured with events.
@@ -516,6 +518,7 @@ class MockCopilotClientWrapper:
         self.last_model = model
         self.last_system_message = system_message
         self.last_tools = tools
+        self.last_max_tokens = max_tokens
 
         # Create session with configured events
         self._session = self._session_class(

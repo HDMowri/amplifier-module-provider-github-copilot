@@ -131,7 +131,3 @@ class TestSessionLifecycleErrors:
 
         assert isinstance(result, ProviderUnavailableError)
         assert result.retryable is True
-
-
-
-

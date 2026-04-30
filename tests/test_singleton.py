@@ -974,4 +974,3 @@ class TestSessionIsolation:
 
             # Refcount should never go negative
             assert provider_module._shared_client_refcount == 0
-
