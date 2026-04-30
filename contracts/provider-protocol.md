@@ -143,6 +143,13 @@ async def complete(
 - **MUST** destroy session after first turn completes
 - **MUST NOT** maintain state between calls
 - **MUST** translate SDK errors to kernel errors (per error-hierarchy.md)
+- **MUST** forward `ChatRequest.max_output_tokens` (when not None) to the SDK as a
+  per-session output token cap by passing
+  `model_capabilities=ModelCapabilitiesOverride(limits=ModelLimitsOverride(max_output_tokens=<value>))`
+  on `create_session()`. This relies on the `model_capabilities` parameter
+  introduced in `github-copilot-sdk>=0.3.0`. Note: the canonical kernel field is
+  `max_output_tokens` (not `max_tokens`) — confirmed by amplifier-core proto field 6,
+  `message_models.ChatRequest`, and the Anthropic/OpenAI provider implementations.
 
 **Session Lifecycle:**
 ```
@@ -159,6 +166,46 @@ complete() called
     └─→ Destroy session, return response
 ```
 
+**Enforcement Disclaimer for `max_output_tokens` (MUST:10):**
+
+The provider's MUST:10 obligation is **forwarding**, not **enforcement**. The
+distinction is rooted in three layers, each verified against the live SDK and
+real-world model behavior:
+
+1. **Provider** — serializes
+   `model_capabilities=ModelCapabilitiesOverride(limits=ModelLimitsOverride(max_output_tokens=N))`
+   onto `create_session()`. Verified by
+   `tests/test_truncation_visibility.py::TestSessionForwardsMaxTokens`.
+2. **SDK** (`copilot.client._capabilities_to_dict`) — writes the value into the
+   JSON-RPC payload as `modelCapabilities.limits.max_output_tokens` and ships
+   it to the headless `copilot` binary. The SDK contains **no enforcement
+   logic**; the docstring on `create_session` describes the parameter as
+   `"Override individual model capabilities resolved by the runtime"`.
+3. **Backend / model runtime** — may or may not honor the cap, per model. Live
+   evidence (April 2026, github-copilot-sdk 0.3.0): with `max_output_tokens=30`
+   and a controlled counting prompt, `claude-sonnet-4.5` and `claude-haiku-4.5`
+   both produced **>1000 output tokens** with `finish_reason="stop"`.
+
+**Caller obligations:**
+
+- Callers **MUST NOT** treat `max_output_tokens` as a hard cost cap. Treat it as
+  a hint that some model runtimes honor and others ignore.
+- When the cap **is** enforced by a backend, the provider surfaces the signal
+  via `finish_reason="length"` and a single WARNING log line per
+  `streaming-contract:FinishReason:MUST:6`. Callers wanting deterministic
+  output budgeting must implement post-response truncation themselves.
+
+**Provider obligations under MUST:10 are unchanged:** forward when not None;
+do not raise. The provider is correct as long as the value reaches the SDK
+`create_session(model_capabilities=...)` call; what the runtime does with it
+is out of contract scope.
+
+This pattern matches `amplifier-module-provider-anthropic` (forwards
+`request.max_output_tokens` to the Anthropic SDK with no clamp or enforcement)
+and the kernel field definition itself
+(`amplifier_core.message_models.ChatRequest.max_output_tokens: int | None = None`,
+no enforcement docstring).
+
 **Test Anchors:**
 | Anchor | Clause |
 |--------|--------|
@@ -171,6 +218,7 @@ complete() called
 | `provider-protocol:complete:MUST:7` | Extracts images from last user message |
 | `provider-protocol:complete:MUST:8` | Forwards images as BlobAttachments to SDK |
 | `provider-protocol:complete:MUST:9` | When malformed tool sequences are detected (tool call without matching tool result in current request), MUST insert synthetic tool-result messages before prompt extraction and MUST log one WARNING per repair event; MUST NOT raise |
+| `provider-protocol:complete:MUST:10` | When `ChatRequest.max_output_tokens` is not None, MUST forward it to SDK `create_session()` as `model_capabilities=ModelCapabilitiesOverride(limits=ModelLimitsOverride(max_output_tokens=<value>))`; MUST NOT raise; relies on `github-copilot-sdk>=0.3.0` |
 
 ---
 
