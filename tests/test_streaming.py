@@ -547,7 +547,6 @@ class TestStreamingAccumulator:
         assert isinstance(response.content[1], TextBlock)
 
 
-
 # ============================================================================
 # _extract_content_block fix tests
 # Contract: provider-protocol:complete:MUST:5
@@ -1172,6 +1171,7 @@ class TestConfigurationFailFast:
 
         # error_events MUST be populated
         assert config.error_event_types, "error_events must be populated for error detection"
+
 
 class TestParseToolArguments:
     """Tests for S4 fix: _parse_tool_arguments handles str|dict|other SDK argument variance.

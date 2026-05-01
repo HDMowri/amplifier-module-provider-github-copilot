@@ -68,7 +68,7 @@ class TestModuleLevelCompleteTimeout:
         request.model = "claude-opus-4.5"
         request.messages = [MagicMock(role="user", content="test")]
         request.tools = None
-        request.max_tokens = None
+        request.max_output_tokens = None
         request.temperature = None
         request.stop = None
         request.stream = None
@@ -156,7 +156,7 @@ class TestTimeoutEnforcement:
         request.model = "claude-opus-4.5"
         request.messages = [MagicMock(role="user", content="test")]
         request.tools = None
-        request.max_tokens = None
+        request.max_output_tokens = None
         request.temperature = None
         request.stop = None
         request.stream = None

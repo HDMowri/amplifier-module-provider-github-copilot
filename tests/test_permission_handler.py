@@ -37,9 +37,7 @@ class TestOnPermissionRequestHandler:
 
         # Result can be PermissionRequestResult (with .kind) or dict fallback
         if hasattr(result, "kind"):
-            assert result.kind == "reject", (
-                "Permission request must be denied with kind='reject'"
-            )
+            assert result.kind == "reject", "Permission request must be denied with kind='reject'"
         else:
             assert result["kind"] == "reject", (
                 "Permission request must be denied with kind='reject'"

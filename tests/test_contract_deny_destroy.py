@@ -152,7 +152,6 @@ class TestArchitectureFitness:
         assert not violations, "SDK imports found outside sdk_adapter/:\n" + "\n".join(violations)
 
 
-
 def _collect_all_keys(data: Any, prefix: str = "") -> list[str]:
     """Recursively collect all keys from nested dict."""
     from typing import cast

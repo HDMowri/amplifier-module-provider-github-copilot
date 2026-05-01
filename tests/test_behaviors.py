@@ -27,7 +27,7 @@ def _make_standard_request(model: str = "claude-opus-4.5") -> MagicMock:
     request.model = model
     request.messages = [MagicMock(spec=Message, role="user", content="test")]
     request.tools = None
-    request.max_tokens = None
+    request.max_output_tokens = None
     request.temperature = None
     request.stop = None
     request.stream = None
@@ -1038,7 +1038,14 @@ class TestCancelledErrorTranslation:
             from contextlib import asynccontextmanager as _acm
 
             @_acm
-            async def session(self, model=None, *, system_message=None, tools=None):  # type: ignore[override]
+            async def session(  # type: ignore[override]
+                self,
+                model=None,
+                *,
+                system_message=None,
+                tools=None,
+                max_tokens=None,
+            ):
                 nonlocal call_count
                 call_count += 1
                 raise asyncio.CancelledError("cancelled")

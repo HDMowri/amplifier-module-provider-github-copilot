@@ -438,8 +438,7 @@ class TestConnectionErrorMapping:
 
 
 class TestAbortErrorTranslation:
-    """error-hierarchy:AbortError:MUST:1,2 — SDK abort/cancel errors must translate to AbortError.
-    """
+    """error-hierarchy:AbortError:MUST:1,2 — abort/cancel errors must translate to AbortError."""
 
     def test_abort_error_translation(self) -> None:
         """AbortError or CancelledError must translate to kernel AbortError(retryable=False).
@@ -497,9 +496,7 @@ class TestAbortErrorTranslation:
             f"AbortError:MUST:2 — asyncio.TimeoutError must become LLMTimeoutError, "
             f"got {type(result).__name__}"
         )
-        assert result.retryable is True, (
-            "AbortError:MUST:2 — LLMTimeoutError should be retryable"
-        )
+        assert result.retryable is True, "AbortError:MUST:2 — LLMTimeoutError should be retryable"
 
 
 class TestKernelTypesOnly:

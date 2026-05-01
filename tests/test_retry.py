@@ -27,6 +27,7 @@ def _make_request(model: str = "gpt-4o") -> MagicMock:
     request.model = model
     request.messages = []
     request.tools = []
+    request.max_output_tokens = None
     return request
 
 

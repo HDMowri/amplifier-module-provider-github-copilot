@@ -526,6 +526,7 @@ class GitHubCopilotProvider:
                         tools=internal_request.tools or None,
                         attachments=internal_request.attachments or None,
                         system_message=internal_request.system_message,
+                        max_tokens=internal_request.max_tokens,
                     )
                     break  # Success
 
@@ -649,6 +650,14 @@ class GitHubCopilotProvider:
                 )
                 try:
                     # Note: attachments=None for correction - the model already saw the image
+                    # Correction responses only need to produce a structured tool call —
+                    # cap at 512 tokens to bound cost/latency regardless of the caller's
+                    # original cap. Respects caller ceiling if it is lower.
+                    _correction_cap = (
+                        min(512, internal_request.max_tokens)
+                        if internal_request.max_tokens is not None
+                        else 512
+                    )
                     await self._execute_sdk_completion(
                         client=self._client,
                         model=model,
@@ -659,6 +668,7 @@ class GitHubCopilotProvider:
                         tools=internal_request.tools or None,
                         attachments=None,
                         system_message=internal_request.system_message,
+                        max_tokens=_correction_cap,
                     )
                 except asyncio.CancelledError:
                     # C-2: Same guard for the fake-tool correction path.
@@ -771,6 +781,7 @@ class GitHubCopilotProvider:
         tools: list[Any] | None = None,
         attachments: list[dict[str, Any]] | None = None,
         system_message: str | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         """Execute a single SDK completion, draining events to accumulator.
 
@@ -804,7 +815,10 @@ class GitHubCopilotProvider:
 
         async with asyncio.timeout(timeout):
             async with client.session(
-                model=model, tools=tools, system_message=system_message
+                model=model,
+                tools=tools,
+                system_message=system_message,
+                max_tokens=max_tokens,
             ) as sdk_session:
                 # Capture SDK session ID for observability correlation
                 accumulator.sdk_session_id = sdk_session.session_id

@@ -416,6 +416,7 @@ class StreamingChatResponse(ChatResponse):
 | `streaming-contract:ToolCapture:MUST:1` | Tool calls captured |
 | `streaming-contract:ToolCapture:MUST:2` | Tool calls in final response |
 | `streaming-contract:FinishReason:MUST:5` | finish_reason="tool_calls" when tool_calls present |
+| `streaming-contract:FinishReason:MUST:6` | When accumulated `finish_reason == "length"` (SDK indicated truncation due to output token limit), MUST log one WARNING per turn including observed output token count when available; response MUST still be returned to orchestrator unchanged |
 | `streaming-contract:Response:MUST:1` | Final response uses kernel types |
 | `streaming-contract:completion:MUST:1` | Events after TURN_COMPLETE are ignored (except usage) |
 | `streaming-contract:completion:MUST:2` | Events after ERROR are ignored (except usage) |

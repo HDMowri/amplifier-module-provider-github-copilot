@@ -1718,12 +1718,8 @@ class TestEnsureExecutableWiring:
                     pass
 
         msg = str(exc_info.value)
-        assert "/mnt/" not in msg, (
-            f"non-WSL message must NOT mention WSL /mnt/ paths; got: {msg!r}"
-        )
-        assert "DrvFs" not in msg, (
-            f"non-WSL message must NOT mention WSL DrvFs; got: {msg!r}"
-        )
+        assert "/mnt/" not in msg, f"non-WSL message must NOT mention WSL /mnt/ paths; got: {msg!r}"
+        assert "DrvFs" not in msg, f"non-WSL message must NOT mention WSL DrvFs; got: {msg!r}"
         # Must point to the actual non-WSL triggers.
         assert any(term in msg for term in ("NFS", "SMB", "CIFS", "FUSE", "network", "volume")), (
             f"non-WSL message must mention network shares / volume mounts / FUSE; got: {msg!r}"

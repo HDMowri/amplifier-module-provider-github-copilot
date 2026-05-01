@@ -266,5 +266,3 @@ def _auto_restore_tokens_for_live_tests(  # pyright: ignore[reportUnusedFunction
                 del os.environ[var]
     else:
         yield
-
-
