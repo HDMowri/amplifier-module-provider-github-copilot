@@ -120,9 +120,6 @@ class SessionHandle:
         return f"SessionHandle(session_id={self.session_id!r})"
 
 
-SDKSession = Any
-
-
 # ============================================================================
 # Completion Types
 # ============================================================================
@@ -139,6 +136,8 @@ class CompletionRequest:
         attachments: Image attachments (BlobAttachment dicts) for vision models.
         system_message: Optional system message for SDK session (mode: replace).
         max_tokens: Maximum tokens in response.
+        reasoning_effort: Reasoning effort hint forwarded to SDK
+            ``create_session`` per ``provider-protocol:complete:MUST:11``.
 
     """
 
@@ -150,6 +149,10 @@ class CompletionRequest:
     attachments: list[dict[str, Any]] = field(default_factory=list)  # type: ignore[misc]
     system_message: str | None = None
     max_tokens: int | None = None
+    # Contract: provider-protocol:complete:MUST:11. Kernel reasoning_effort
+    # forwarded as opaque str. Validation: validate_reasoning_effort() in
+    # request_adapter, called from provider before the SDK call.
+    reasoning_effort: str | None = None
 
 
 @dataclass

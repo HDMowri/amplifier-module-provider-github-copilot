@@ -26,6 +26,17 @@ This contract defines observability policy for provider instrumentation. Observa
 3. **MUST** emit `llm:response` event AFTER accumulator completes
 4. **MUST** work without coordinator (standalone mode)
 5. **MUST NOT** assume coordinator.hooks.emit() exists
+6. **MUST NOT** emit `llm:request`/`llm:response` for pre-flight
+   `ConfigurationError` raised before any SDK interaction. The request/response
+   pair invariant frames *the SDK call*, not the public `complete()`
+   invocation. Caller-bug rejections (e.g., `validate_reasoning_effort`
+   raising on `supports_reasoning_effort=False`) are categorically distinct
+   from in-flight failures: the SDK was never reached, so there is no
+   `llm:request` to pair, and no `llm:response` error to emit. Operators
+   tracking caller-bug rates MUST consume the INFO/WARNING log channel
+   (`[REQUEST_ADAPTER]` prefix) rather than diff `llm:request_count -
+   llm:response_count`. See `provider-protocol:complete:MUST:11` for the
+   pre-flight gate that owns this exemption.
 
 ### SHOULD Constraints
 
@@ -117,6 +128,7 @@ implementation never parsed these values.
 | `observability:Events:MUST:3` | Emit llm:response after complete |
 | `observability:Events:MUST:4` | Work without coordinator (standalone mode) |
 | `observability:Events:MUST:5` | MUST NOT assume coordinator.hooks.emit() exists |
+| `observability:Events:MUST:6` | Pre-flight ConfigurationError exempt from request/response emission |
 | `observability:Events:SHOULD:3` | Include sdk_pid in llm:response |
 | `observability:Verbosity:MUST:1` | Single raw flag |
 | `observability:Debug:MUST:1` | raw=true → tool_schemas list in llm:request raw payload |

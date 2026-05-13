@@ -144,6 +144,7 @@ def sample_chat_request() -> MagicMock:
     req = MagicMock()
     req.messages = [MagicMock(role="user", content="Hello")]
     req.model = "gpt-4o"
+    req.reasoning_effort = None
     return req
 
 
@@ -352,6 +353,7 @@ def tool_bearing_chat_request() -> MagicMock:
     ]
     req.model = "claude-sonnet-4.6"
     req.tools = [tool_obj, tool_dict]
+    req.reasoning_effort = None
     return req
 
 

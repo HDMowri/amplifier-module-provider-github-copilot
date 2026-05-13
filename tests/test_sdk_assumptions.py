@@ -326,6 +326,47 @@ class TestReasoningEffortLiteralPin:
             f"allowlist may need to follow the SDK's chosen Literal."
         )
 
+    def test_fallback_allowlist_matches_sdk_reasoning_effort_literal(
+        self, sdk_module: Any
+    ) -> None:
+        """``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` MUST equal
+        ``frozenset(get_args(ReasoningEffort))`` so a future SDK Literal
+        addition (e.g. ``"ultra"``) is caught here at CI time rather than
+        producing a wrong ``ConfigurationError`` in production on a
+        cold-cache cache-miss path.
+
+        Contract: provider-protocol:complete:MUST:11 (SDK literal allowlist
+        ``{"low","medium","high","xhigh"}`` enumerated verbatim in
+        ``contracts/provider-protocol.md``).
+
+        Mutation check:
+        - SDK adds ``"ultra"`` but constant unchanged → red (added in SDK).
+        - Constant drops ``"xhigh"`` → red (stale in provider).
+        - Constant adds ``"banana"`` → red (stale in provider).
+        - Both updated to ``{"low","medium","high","xhigh","ultra"}`` → green.
+        """
+        from typing import get_args
+
+        from copilot.client import ReasoningEffort  # type: ignore[import-untyped]
+
+        from amplifier_module_provider_github_copilot.request_adapter import (
+            _REASONING_EFFORT_FALLBACK_ALLOWLIST,
+        )
+
+        sdk_members = frozenset(get_args(ReasoningEffort))
+        assert sdk_members == _REASONING_EFFORT_FALLBACK_ALLOWLIST, (
+            f"Provider _REASONING_EFFORT_FALLBACK_ALLOWLIST drifted from SDK "
+            f"ReasoningEffort Literal.\n"
+            f"  SDK:               {sorted(sdk_members)}\n"
+            f"  Provider:          {sorted(_REASONING_EFFORT_FALLBACK_ALLOWLIST)}\n"
+            f"  Added in SDK:      {sorted(sdk_members - _REASONING_EFFORT_FALLBACK_ALLOWLIST)}\n"
+            f"  Stale in provider: {sorted(_REASONING_EFFORT_FALLBACK_ALLOWLIST - sdk_members)}\n"
+            f"Update _REASONING_EFFORT_FALLBACK_ALLOWLIST in "
+            f"amplifier_module_provider_github_copilot/request_adapter.py "
+            f"AND the contract enumeration at "
+            f"contracts/provider-protocol.md MUST:11."
+        )
+
 
 @pytest.mark.sdk_assumption
 class TestOverrideDataclassShapes:

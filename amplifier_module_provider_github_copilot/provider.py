@@ -86,6 +86,7 @@ from .request_adapter import (
     build_request_payload_for_observability,
     build_response_payload_for_observability,
     convert_chat_request,
+    validate_reasoning_effort,
 )
 from .request_adapter import (
     extract_prompt_from_chat_request as _extract_prompt_from_chat_request,
@@ -96,6 +97,7 @@ from .sdk_adapter import (
     CompletionConfig,
     CompletionRequest,
     CopilotClientWrapper,
+    CopilotModelInfo,
     SDKCreateFn,
     SDKSession,
     SessionConfig,
@@ -353,6 +355,11 @@ class GitHubCopilotProvider:
         # Track pending streaming emit tasks for cleanup
         # Contract: streaming-contract:ProgressiveStreaming:SHOULD:3
         self._pending_emit_tasks: set[asyncio.Task[Any]] = set()
+        # In-memory capability cache for the reasoning_effort gate hot path.
+        # Warmed by list_models() and lazily populated by the first
+        # _lookup_copilot_model_info() call. None means "never populated";
+        # an empty list means "looked up disk, nothing there".
+        self._copilot_models_cache: list[CopilotModelInfo] | None = None
 
     @property
     def _effective_default_model(self) -> str:
@@ -432,6 +439,10 @@ class GitHubCopilotProvider:
 
                 logger.warning("Failed to cache models: %s", redact_sensitive_text(cache_err))
 
+            # Warm the in-memory capability cache so the reasoning_effort gate
+            # hot path skips disk I/O on subsequent complete() calls.
+            self._copilot_models_cache = list(copilot_models)
+
             return cast(list[ModelInfo], models)
         except Exception as sdk_err:
             from .security_redaction import redact_sensitive_text
@@ -442,6 +453,9 @@ class GitHubCopilotProvider:
         cached_models = read_cache()
         if cached_models:
             logger.info("Using cached models (%d models)", len(cached_models))
+            # Mirror Tier 1: warm the in-memory capability cache so the
+            # reasoning_effort gate hot path stays zero-I/O on subsequent calls.
+            self._copilot_models_cache = list(cached_models)
             return cast(
                 list[ModelInfo],
                 [copilot_model_to_amplifier_model(m) for m in cached_models],
@@ -480,6 +494,28 @@ class GitHubCopilotProvider:
 
         # Effective model: request.model > runtime config > YAML default
         model = internal_request.model or self._effective_default_model
+
+        # Contract: provider-protocol:complete:MUST:11. Layer-1 capability gate.
+        # Skip the cache read when no effort was requested to keep the hot path
+        # zero-overhead. Cache miss is non-fatal: validate_reasoning_effort
+        # applies the SDK literal allowlist and defers per-model policy to
+        # errors.yaml:P4.
+        #
+        # Contract: observability:Events:MUST:6. Pre-flight ConfigurationError
+        # raised here is exempt from llm:request/llm:response emission — the
+        # SDK was never touched, so the request/response pair invariant does
+        # not apply. Caller-bug rejections are tracked via INFO/WARNING logs
+        # and are categorically distinct from in-flight failures (which the
+        # 5xx-class llm:response error events cover).
+        if internal_request.reasoning_effort is None:
+            validated_reasoning_effort: str | None = None
+        else:
+            model_info = self._lookup_copilot_model_info(model)
+            validated_reasoning_effort = validate_reasoning_effort(
+                internal_request.reasoning_effort,
+                model_info,
+                model_id=model,
+            )
 
         # Create lifecycle context for observability (handles timing)
         # raw=self._raw passes per-instance flag parsed once in __init__
@@ -527,6 +563,7 @@ class GitHubCopilotProvider:
                         attachments=internal_request.attachments or None,
                         system_message=internal_request.system_message,
                         max_tokens=internal_request.max_tokens,
+                        reasoning_effort=validated_reasoning_effort,
                     )
                     break  # Success
 
@@ -669,6 +706,11 @@ class GitHubCopilotProvider:
                         attachments=None,
                         system_message=internal_request.system_message,
                         max_tokens=_correction_cap,
+                        # Contract: provider-protocol:complete:MUST:11.
+                        # Forward the same validated value the main path used
+                        # so reasoning posture is uniform across the turn;
+                        # the contract explicitly mandates BOTH call sites.
+                        reasoning_effort=validated_reasoning_effort,
                     )
                 except asyncio.CancelledError:
                     # C-2: Same guard for the fake-tool correction path.
@@ -770,6 +812,41 @@ class GitHubCopilotProvider:
             )
         return delay_ms
 
+    def _lookup_copilot_model_info(self, model_id: str) -> CopilotModelInfo | None:
+        """Resolve the capability descriptor for ``model_id`` without forcing
+        a disk read on every ``complete()`` call.
+
+        Lookup order:
+        1. In-memory cache (warmed by ``list_models`` or a prior miss).
+        2. ``read_cache()`` once on first miss; result memoized.
+
+        The in-memory cache lives for the process lifetime; refresh requires a
+        successful ``list_models()`` SDK or disk-fallback call. Stale entries
+        are non-fatal: a missing model defers final validation to
+        ``errors.yaml:P4`` (same error class) after the universal SDK literal
+        allowlist check.
+
+        Contract: provider-protocol:complete:MUST:11
+        """
+        if self._copilot_models_cache is None:
+            cached = read_cache()
+            if cached is None:
+                # Memoize the disk-miss as ``[]`` (NOT ``None``) so subsequent
+                # calls in this process avoid redundant disk I/O on the
+                # reasoning_effort hot path. The field-level docstring is the
+                # contract: ``None`` means "never populated"; ``[]`` means
+                # "looked up, nothing there." A successful ``list_models()``
+                # call later in the process will overwrite ``[]`` with real
+                # entries — the negative memoization is purely a
+                # missing-cache-file optimization.
+                self._copilot_models_cache = []
+                return None
+            self._copilot_models_cache = list(cached)
+        for info in self._copilot_models_cache:
+            if info.id == model_id:
+                return info
+        return None
+
     async def _execute_sdk_completion(
         self,
         client: CopilotClientWrapper,
@@ -782,6 +859,7 @@ class GitHubCopilotProvider:
         attachments: list[dict[str, Any]] | None = None,
         system_message: str | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         """Execute a single SDK completion, draining events to accumulator.
 
@@ -819,6 +897,7 @@ class GitHubCopilotProvider:
                 tools=tools,
                 system_message=system_message,
                 max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
             ) as sdk_session:
                 # Capture SDK session ID for observability correlation
                 accumulator.sdk_session_id = sdk_session.session_id
@@ -868,7 +947,8 @@ class GitHubCopilotProvider:
                     # Record TTFT start time before send
                     # Contract: behaviors:Streaming:MUST:1
                     ttft_state["start_time"] = time.time()
-                    # SDK v0.2.0: send(prompt, attachments=...) replaces send({"prompt": ...})
+                    # SDK v0.3.0: send(prompt, attachments=...) replaces the
+                    # legacy v0.2.x send({"prompt": ...}) dict shape.
                     # Contract: sdk-boundary:ImagePassthrough:MUST:7
                     logger.debug("[SDK_COMPLETION] Sending prompt to SDK session...")
                     await sdk_session.send(prompt, attachments=attachments)
