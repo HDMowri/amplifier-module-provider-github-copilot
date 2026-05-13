@@ -94,9 +94,24 @@ event_classifications:
     - session.resume
     - session.task_complete
     - hook.*
-    - elicitation.*  # SDK v0.2.1: elicitation dialogs, provider-initiated UI — not our concern
-    - command.*      # SDK v0.2.1: slash command dispatch — provider does not handle commands
-    - capabilities.changed  # SDK v0.2.1: CLI host capability changes — no domain action
+    - elicitation.*  # provider-initiated UI dialogs
+    - command.*      # slash command dispatch (singular)
+    - commands.changed  # plural variant; not matched by `command.*` wildcard
+    - capabilities.changed  # CLI host capability changes
+    # SDK 0.3.0 enum members (verified via meta-test against
+    # copilot.generated.session_events.SessionEventType). Classified DROP:
+    # provider's surface is single-completion + tool-call deltas; lifecycle,
+    # MCP, sampling, and auto-mode notifications carry no domain value.
+    - auto_mode_switch.requested
+    - auto_mode_switch.completed
+    - mcp.oauth_required
+    - mcp.oauth_completed
+    - sampling.requested
+    - sampling.completed
+    - session.extensions_loaded
+    - session.mcp_servers_loaded
+    - session.mcp_server_status_changed
+    - session.remote_steerable_changed
     - subagent.*
     - skill.*
     - user.*
