@@ -2,7 +2,6 @@
 
 from typing import Any
 
-
 class LLMError(Exception):
     """Base class for all LLM errors."""
     message: str
@@ -28,7 +27,7 @@ class AuthenticationError(LLMError):
 class RateLimitError(LLMError):
     """Rate limit exceeded."""
     retry_after: float | None
-    
+
     def __init__(
         self,
         message: str,
@@ -41,7 +40,7 @@ class RateLimitError(LLMError):
 class LLMTimeoutError(LLMError):
     """Request timed out."""
     timeout: float | None
-    
+
     def __init__(
         self,
         message: str,

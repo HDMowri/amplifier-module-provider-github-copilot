@@ -1,8 +1,7 @@
 """Type stubs for copilot.types module."""
 
-from typing import Any, Literal
 from dataclasses import dataclass
-
+from typing import Any, Literal
 
 LogLevel = Literal["debug", "info", "warn", "error"]
 
@@ -16,7 +15,7 @@ class TelemetryConfig:
 @dataclass
 class SubprocessConfig:
     """Configuration for SDK subprocess mode.
-    
+
     Matches real SDK signature from help(SubprocessConfig).
     """
     cli_path: str | None = None
@@ -63,7 +62,7 @@ class ModelInfo:
     max_output_tokens: int | None = None
     preview: bool = False
     is_default: bool = False
-    policy: "ModelPolicy | None" = None
+    policy: ModelPolicy | None = None
 
 
 @dataclass
@@ -82,7 +81,7 @@ class SDKEvent:
 
 __all__ = [
     "SubprocessConfig",
-    "BlobAttachment", 
+    "BlobAttachment",
     "PermissionRequestResult",
     "ModelInfo",
     "ModelPolicy",

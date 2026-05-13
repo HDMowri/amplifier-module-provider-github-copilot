@@ -2,12 +2,11 @@
 
 from typing import Any, Literal
 
-
 class Message:
     """Message in a chat conversation (Pydantic model)."""
     role: str
     content: str | list[Any]
-    
+
     def __init__(self, *, role: str, content: str | list[Any], **kwargs: Any) -> None: ...
 
 
@@ -16,7 +15,7 @@ class TextBlock:
     type: Literal["text"]
     text: str
     visibility: Literal["internal", "developer", "user"] | None
-    
+
     def __init__(self, *, text: str, type: str = "text", **kwargs: Any) -> None: ...
 
 
@@ -25,8 +24,15 @@ class ThinkingBlock:
     type: Literal["thinking"]
     thinking: str
     signature: str | None
-    
-    def __init__(self, *, thinking: str, type: str = "thinking", signature: str | None = None, **kwargs: Any) -> None: ...
+
+    def __init__(
+        self,
+        *,
+        thinking: str,
+        type: str = "thinking",
+        signature: str | None = None,
+        **kwargs: Any,
+    ) -> None: ...
 
 
 class ToolCallBlock:
@@ -36,7 +42,15 @@ class ToolCallBlock:
     name: str
     input: dict[str, Any]  # NOTE: 'input', not 'arguments' (that's ToolCall)
 
-    def __init__(self, *, type: str = "tool_call", id: str, name: str, input: dict[str, Any], **kwargs: Any) -> None: ...
+    def __init__(
+        self,
+        *,
+        type: str = "tool_call",
+        id: str,
+        name: str,
+        input: dict[str, Any],
+        **kwargs: Any,
+    ) -> None: ...
 
 
 class ToolSpec:
@@ -44,7 +58,7 @@ class ToolSpec:
     name: str
     description: str
     parameters: dict[str, Any] | None
-    
+
     def __init__(
         self,
         *,
@@ -69,7 +83,7 @@ class ToolCall:
 __all__ = [
     "Message",
     "TextBlock",
-    "ThinkingBlock", 
+    "ThinkingBlock",
     "ToolCallBlock",
     "ToolCall",
     "ToolSpec",
