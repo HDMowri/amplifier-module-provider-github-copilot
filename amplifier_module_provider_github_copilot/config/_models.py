@@ -28,7 +28,6 @@ PROVIDER: dict = {
     "defaults": {
         "model": "claude-opus-4.5",
         "max_tokens": 4096,
-        "temperature": 0.7,
         "timeout": 3600,
         "context_window": 200000,
         "max_output_tokens": 32000,

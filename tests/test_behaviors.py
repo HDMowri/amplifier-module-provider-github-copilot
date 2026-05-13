@@ -557,6 +557,45 @@ class TestProductionPathWithMockClient:
         assert mock_client.last_tools == [tool]
 
     @pytest.mark.asyncio
+    async def test_complete_does_not_forward_chat_request_temperature_to_session(
+        self,
+    ) -> None:
+        """ChatRequest.temperature MUST NOT reach the SDK session.
+
+        github-copilot-sdk v0.3.0 has no temperature kwarg. The kernel still
+        carries one on ChatRequest for sibling providers, so the provider's
+        own complete() path must drop it. The wrapper-layer test in
+        test_client_lifecycle.py only proves the wrapper invents nothing;
+        this test proves the kernel ingress doesn't smuggle it through.
+
+        MockCopilotClientWrapper.session() has an explicit typed signature
+        and rejects unknown kwargs with TypeError, so a future addition of
+        ``temperature=request.temperature`` at provider.py's session call
+        site would fail this test loudly.
+
+        Contract: sdk-boundary:Config:MUST:1
+        """
+        from amplifier_module_provider_github_copilot.provider import (
+            GitHubCopilotProvider,
+        )
+        from tests.fixtures.sdk_mocks import (
+            MockCopilotClientWrapper,
+            text_delta_event,
+        )
+
+        mock_client = MockCopilotClientWrapper(events=[text_delta_event("ok")])
+        provider = GitHubCopilotProvider(client=mock_client)  # type: ignore[arg-type]
+
+        request = _make_standard_request()
+        request.temperature = 0.42
+
+        # If complete() ever forwards temperature, this raises TypeError
+        # before reaching the assertion below.
+        await provider.complete(request)
+
+        assert mock_client.last_model == "claude-opus-4.5"
+
+    @pytest.mark.asyncio
     async def test_mock_client_session_receives_system_message(self) -> None:
         """MockCopilotClientWrapper.session() receives system_message from ChatRequest.
 
