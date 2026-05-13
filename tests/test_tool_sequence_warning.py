@@ -139,9 +139,9 @@ class TestRepairBehavior:
 
     Contract: provider-protocol:complete:MUST:9
 
-    BECK requirement: warning tests prove a log line exists; behavioral tests
-    prove the repair *actually changed the prompt*. Without these, a no-op
-    that only logs would satisfy all warning assertions.
+    Warning tests prove a log line exists; behavioral tests prove the repair
+    *actually changed the prompt*. Without these, a no-op that only logs would
+    satisfy all warning assertions.
     """
 
     def test_repaired_prompt_contains_synthetic_tool_result(self) -> None:
@@ -302,7 +302,7 @@ class TestWellFormedToolSequence:
         Contract: provider-protocol:complete:MUST:9
 
         Regression: before role-scoping fix, a user message containing a tool_call
-        block would falsely trigger the malformed-sequence warning (GAMMA blocking).
+        block would falsely trigger the malformed-sequence warning.
         """
         from amplifier_module_provider_github_copilot.request_adapter import (
             convert_chat_request,
@@ -338,7 +338,7 @@ class TestWellFormedToolSequence:
         Contract: provider-protocol:complete:MUST:9
 
         Regression: before the unnamed-call fix, a tool_call block with no ID was
-        silently skipped and would never trigger a warning (BECK blocking).
+        silently skipped and would never trigger a warning.
         """
         from amplifier_module_provider_github_copilot.request_adapter import (
             convert_chat_request,
@@ -654,7 +654,7 @@ class TestKernelRoleToolFormat:
 
         Contract: provider-protocol:complete:MUST:9
 
-        SCHNEIER regression gap: positional backward-walk would mark ALL 3 calls
+        Regression gap: positional backward-walk would mark ALL 3 calls
         satisfied when ANY role='tool' result arrives (walks back to the assistant
         message and adds all 3 IDs at once — false negative).
         Message.tool_call_id approach adds only the specific answered ID.
