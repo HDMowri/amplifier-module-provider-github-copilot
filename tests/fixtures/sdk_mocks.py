@@ -24,8 +24,17 @@ from uuid import UUID, uuid4
 class SessionEventType(Enum):
     """Mock of SDK SessionEventType enum.
 
-    Values match SDK SessionEventType from github-copilot-sdk.
-    P2-8: Added UNKNOWN type to match real SDK behavior.
+    Member set tracks the real SDK ``copilot.generated.session_events.SessionEventType``
+    (verified 2026-05-12: 77 members; legacy underscore names like
+    ``MESSAGE_COMPLETE`` / ``TOOL_USE_COMPLETE`` / ``USAGE_UPDATE`` were
+    REMOVED in v0.3.0). The mock intentionally stubs only the subset the
+    provider's classification path exercises directly; ``UNKNOWN`` is the
+    canonical fallback that real-SDK behavior emits for unrecognized types.
+
+    Legacy underscore event STRINGS (``message_complete``, etc.) still flow
+    through provider classification via ``events.yaml`` mappings — they are
+    bridged to domain events without round-tripping through this enum, so
+    the mock does not need a placeholder member for them.
     """
 
     SESSION_IDLE = "session.idle"
@@ -36,12 +45,7 @@ class SessionEventType(Enum):
     ASSISTANT_REASONING_DELTA = "assistant.reasoning_delta"
     ASSISTANT_USAGE = "assistant.usage"
     TOOL_EXECUTION_COMPLETE = "tool.execution_complete"
-    # P2-8: UNKNOWN type for unrecognized events (real SDK uses this)
     UNKNOWN = "unknown"
-    # Legacy aliases for test compatibility
-    MESSAGE_COMPLETE = "message_complete"
-    TOOL_USE_COMPLETE = "tool_use_complete"
-    USAGE_UPDATE = "usage_update"
 
 
 @dataclass
@@ -102,7 +106,12 @@ class SessionEvent:
     timestamp: datetime = field(default_factory=datetime.now)
 
 
-# Mapping from legacy string types to SessionEventType
+# Mapping from SDK event-type strings to mock SessionEventType members.
+# Legacy underscore strings (``message_complete``, ``tool_use_complete``,
+# ``usage_update``) are intentionally NOT mapped here: in real SDK v0.3.0
+# those are no longer emitted as event types, and any dict carrying one
+# should fall through to UNKNOWN — matching the real-SDK fallback and
+# exercising provider event-classification's unknown-event handling.
 _LEGACY_TYPE_MAP: dict[str, SessionEventType] = {
     "session.idle": SessionEventType.SESSION_IDLE,
     "SESSION_IDLE": SessionEventType.SESSION_IDLE,
@@ -113,10 +122,6 @@ _LEGACY_TYPE_MAP: dict[str, SessionEventType] = {
     "assistant.reasoning_delta": SessionEventType.ASSISTANT_REASONING_DELTA,
     "assistant.usage": SessionEventType.ASSISTANT_USAGE,
     "tool.execution_complete": SessionEventType.TOOL_EXECUTION_COMPLETE,
-    # Legacy underscore aliases used by tests
-    "message_complete": SessionEventType.MESSAGE_COMPLETE,
-    "tool_use_complete": SessionEventType.TOOL_USE_COMPLETE,
-    "usage_update": SessionEventType.USAGE_UPDATE,
 }
 
 
@@ -181,8 +186,14 @@ class MockSDKSession:
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        mode: Any | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> str:
         """Send message and trigger events via handlers.
+
+        Signature mirrors the live SDK ``CopilotSession.send`` (v0.3.0):
+        ``mode`` and ``request_headers`` are accepted-and-recorded so tests
+        that exercise the full call surface do not silently lose data.
 
         SDK v0.2.0 API: send(prompt, attachments=...) replaces send({"prompt": ...})
 
@@ -232,7 +243,11 @@ class MockSDKSession:
             return event
         # Convert dict to SessionEvent
         type_str = event.get("type", "session.idle")
-        event_type = _LEGACY_TYPE_MAP.get(type_str, SessionEventType.SESSION_IDLE)
+        # Unknown event types map to UNKNOWN — the real SDK uses this
+        # canonical fallback (see SessionEventType.UNKNOWN at runtime). Mapping
+        # to SESSION_IDLE here would silently absorb genuinely-unknown events
+        # as benign idle frames, hiding classification gaps.
+        event_type = _LEGACY_TYPE_MAP.get(type_str, SessionEventType.UNKNOWN)
 
         # SDK v0.1.33+: text deltas use delta_content, not text
         # Check for both to support legacy test dicts
@@ -342,8 +357,14 @@ class MockSDKSessionWithError(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        mode: Any | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> str:
         """Send message but raise error after some events.
+
+        Signature mirrors the live SDK ``CopilotSession.send`` (v0.3.0);
+        ``mode`` / ``request_headers`` are accepted but unused by this fault
+        injector — included so error-path tests can pass the full kwarg set.
 
         Args:
             prompt: The message prompt text.
@@ -473,6 +494,12 @@ class MockCopilotClientWrapper:
         self._session: MockSDKSession | None = None
         # Mock PID for testing sdk_pid emission
         self._mock_copilot_pid: str | None = None
+        # Last-call captures (parallel to real CopilotClientWrapper.session args)
+        self.last_model: str | None = None
+        self.last_system_message: str | None = None
+        self.last_tools: list[Any] | None = None
+        self.last_max_tokens: int | None = None
+        self.last_reasoning_effort: str | None = None
 
     def is_healthy(self) -> bool:
         """Always healthy for testing (no real subprocess)."""
@@ -494,6 +521,7 @@ class MockCopilotClientWrapper:
         system_message: str | None = None,
         tools: list[Any] | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[MockSDKSession]:
         """Create a mock session context manager.
 
@@ -504,6 +532,7 @@ class MockCopilotClientWrapper:
             system_message: System message (stored for assertions).
             tools: Tool definitions (stored for assertions).
             max_tokens: Per-session output token cap (stored for assertions).
+            reasoning_effort: Per-session reasoning effort (stored for assertions).
 
         Yields:
             MockSDKSession configured with events.
@@ -519,6 +548,7 @@ class MockCopilotClientWrapper:
         self.last_system_message = system_message
         self.last_tools = tools
         self.last_max_tokens = max_tokens
+        self.last_reasoning_effort = reasoning_effort
 
         # Create session with configured events
         self._session = self._session_class(
@@ -540,7 +570,9 @@ class MockCopilotClientWrapper:
         """
         if self._model_list is not None:
             return self._model_list
-        # Default: return a minimal model list matching current SDK 0.2.2 models
+        # Default: return a minimal model list. Real SDK 0.3.0 lists a much
+        # wider catalog; tests that depend on specific models override this
+        # via ``set_model_list`` rather than relying on the default.
         return [
             {
                 "id": "claude-opus-4.5",

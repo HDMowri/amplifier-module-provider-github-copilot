@@ -60,7 +60,7 @@ class MockModelCapabilities:
 
 @dataclass
 class MockSDKModelInfo:
-    """Mock SDK ModelInfo - replicates copilot.types.ModelInfo structure."""
+    """Mock SDK ModelInfo - replicates copilot.client.ModelInfo structure."""
 
     id: str
     name: str
