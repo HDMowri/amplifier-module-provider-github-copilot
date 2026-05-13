@@ -1,11 +1,11 @@
 # Contract: Provider Protocol
 
 ## Version
-- **Current:** 1.1 (v2.1 Kernel-Validated)
+- **Current:** 1.2 (v2.1 Kernel-Validated)
 - **Module Reference:** amplifier_module_provider_github_copilot/provider.py
 - **Amplifier Contract:** amplifier-core PROVIDER_CONTRACT.md
 - **Status:** Specification
-- **Updated:** 2026-03-31 — Clarified mount() failure semantics
+- **Updated:** 2026-05-12 — Added MUST:11 (reasoning_effort plumbing) and QualityGates section. Cross-referenced `observability:Events:MUST:6` (pre-flight ConfigurationError exempt from llm:request/llm:response emission).
 
 ---
 
@@ -150,6 +150,22 @@ async def complete(
   introduced in `github-copilot-sdk>=0.3.0`. Note: the canonical kernel field is
   `max_output_tokens` (not `max_tokens`) — confirmed by amplifier-core proto field 6,
   `message_models.ChatRequest`, and the Anthropic/OpenAI provider implementations.
+- **MUST** forward `ChatRequest.reasoning_effort` (when not None and not the
+  empty string) to the SDK as the `reasoning_effort` kwarg on `client.session()`,
+  which the SDK adapter translates to
+  `CopilotClient.create_session(reasoning_effort=<value>)` and the SDK
+  serializes onto the JSON-RPC `session.create` payload as `reasoningEffort`.
+  Before the SDK call, the provider MUST pre-validate the value against the
+  resolved model's capability descriptor: if
+  `CopilotModelInfo.supports_reasoning_effort` is False, or the value is not in
+  `CopilotModelInfo.supported_reasoning_efforts` (when that allowlist is
+  non-empty), raise `kernel_errors.ConfigurationError` with the offending
+  model id, the rejected value, and (when applicable) the allowed set. The
+  empty string `""` is treated as None (no effort requested). Forwarding
+  applies to BOTH the normal completion call site and the fake-tool correction
+  retry call site in `provider.py`. Relies on `github-copilot-sdk>=0.3.0`
+  (`create_session(reasoning_effort=...)` — signature at `client.py:1198`,
+  payload write at `client.py:1322`).
 
 **Session Lifecycle:**
 ```
@@ -206,6 +222,72 @@ and the kernel field definition itself
 (`amplifier_core.message_models.ChatRequest.max_output_tokens: int | None = None`,
 no enforcement docstring).
 
+**Enforcement Disclaimer for `reasoning_effort` (MUST:11):**
+
+The provider's MUST:11 obligation is **forward + pre-validate**, not enforce
+that the model actually reasons. Three layers are in scope:
+
+1. **Provider Layer 1 (proactive gate)** — `validate_reasoning_effort()` in
+   `request_adapter.py` is called from `provider.complete()` after
+   `convert_chat_request` and after `CopilotModelInfo` lookup. Raises
+   `kernel_errors.ConfigurationError` on (a) `supports_reasoning_effort=False`,
+   (b) value outside a non-empty `supported_reasoning_efforts` allowlist,
+   (c) value longer than 16 chars (defensive), (d) mixed-case value (SDK is
+   strictly lowercase Literal), or (e) cache-miss (`model_info is None`)
+   AND value not in the SDK literal allowlist
+   `{"low","medium","high","xhigh"}` mirroring the SDK's
+   `ReasoningEffort` Literal. Verified by `tests/test_reasoning_effort.py`.
+2. **Provider Layer 2 (SDK-error backstop)** — when Layer 1 is bypassed
+   (stale capability cache, model added server-side, or model_info lookup
+   miss), the SDK raises `JsonRpcError` with `"does not support"` text.
+   `errors.yaml:P4` substring rule maps this to `ConfigurationError` via
+   `error_translation.py`. Layer-1 and Layer-2 raise the SAME class —
+   contract obligation, not coincidence.
+3. **Backend / model runtime** — decides whether to actually allocate
+   reasoning tokens. `claude-opus-4.7` family advertises
+   `supports_reasoning_effort=True` yet may emit zero `assistant.reasoning*`
+   events (filed upstream as F3-B); `claude-haiku-4.5` may emit reasoning
+   despite advertising `=False`. The provider does not police runtime
+   behavior.
+
+**Caller obligations:**
+
+- Callers MUST treat a successful forward as "the value reached the runtime,"
+  NOT as "the model will reason at this depth."
+- Callers MUST NOT rely on `assistant.reasoning*` events being emitted for any
+  given (model, effort) pair; the runtime decides.
+- Empty string `""` is treated as None (no effort requested).
+- Mixed-case values (e.g., `"Medium"`) are rejected; SDK contract is strictly
+  lowercase per `Literal["low","medium","high","xhigh"]`.
+
+**Provider obligations under MUST:11:** when not None and not empty, validate
+against the target model's capability descriptor and forward the verbatim
+string to `client.session(reasoning_effort=...)`; both the main completion
+path and the fake-tool correction retry path MUST forward identically.
+`_execute_sdk_completion` MUST accept `reasoning_effort` as an explicit
+keyword argument (no `**kwargs` smuggle).
+
+**Module References (MUST:11):**
+- Layer-1 gate: `request_adapter.validate_reasoning_effort`
+- Provider call site: `provider.GitHubCopilotProvider.complete` (pre-SDK
+  capability gate) and `provider.GitHubCopilotProvider._execute_sdk_completion`
+  (explicit `reasoning_effort` parameter; both main and fake-tool-retry paths)
+- Membrane forward: `sdk_adapter.client.CopilotClientWrapper.session`
+  (forwards `reasoning_effort` to `CopilotClient.create_session`)
+- Carrier field: `sdk_adapter.types.CompletionRequest.reasoning_effort`
+- Capability descriptor: `sdk_adapter.CopilotModelInfo.supports_reasoning_effort`
+  and `supported_reasoning_efforts`
+- Layer-2 backstop: `config/data/errors.yaml` rule P4 → `error_translation.py`
+
+This pattern parallels MUST:10 (forward-not-enforce). The sibling Anthropic
+provider's pattern is **forwarding-only** (`getattr(request, "reasoning_effort",
+None)` straight into the Anthropic SDK call without a capability gate); this
+provider adds the Layer-1 capability gate because the GitHub Copilot SDK
+exposes per-model capability metadata (`CopilotModelInfo`) that the Anthropic
+provider does not have, and because a server-side rejection here surfaces as a
+remote `JsonRpcError` rather than a local TypeError. Layer 1 keeps the failure
+local and gives a helpful error enumerating the accepted values.
+
 **Test Anchors:**
 | Anchor | Clause |
 |--------|--------|
@@ -219,6 +301,7 @@ no enforcement docstring).
 | `provider-protocol:complete:MUST:8` | Forwards images as BlobAttachments to SDK |
 | `provider-protocol:complete:MUST:9` | When malformed tool sequences are detected (tool call without matching tool result in current request), MUST insert synthetic tool-result messages before prompt extraction and MUST log one WARNING per repair event; MUST NOT raise |
 | `provider-protocol:complete:MUST:10` | When `ChatRequest.max_output_tokens` is not None, MUST forward it to SDK `create_session()` as `model_capabilities=ModelCapabilitiesOverride(limits=ModelLimitsOverride(max_output_tokens=<value>))`; MUST NOT raise; relies on `github-copilot-sdk>=0.3.0` |
+| `provider-protocol:complete:MUST:11` | When `ChatRequest.reasoning_effort` is not None and not empty, MUST pre-validate the value against the SDK literal allowlist `{"low","medium","high","xhigh"}` (case-sensitive) regardless of cache state, then against the resolved model's `supports_reasoning_effort` and `supported_reasoning_efforts`; on cache-miss (`CopilotModelInfo` unavailable) MUST emit an INFO log deferring final per-model validation to the SDK Layer-2 backstop; on any mismatch MUST raise `kernel_errors.ConfigurationError` before any SDK call; otherwise MUST forward verbatim to `client.session(reasoning_effort=<value>)` on BOTH the main and fake-tool-retry call sites; relies on `github-copilot-sdk>=0.3.0` |
 
 ---
 

@@ -73,7 +73,7 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
     accesses SDK object structure via duck-typing.
 
     Args:
-        sdk_model: SDK ModelInfo object (from copilot.types)
+        sdk_model: SDK ModelInfo object (from copilot.client)
 
     Returns:
         CopilotModelInfo domain type
@@ -128,11 +128,16 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
                 supports.reasoning_effort if supports.reasoning_effort is not None else False
             )
 
-    # Extract reasoning effort fields
-    supported_efforts = sdk_model.supported_reasoning_efforts
+    # Extract reasoning effort fields. ``getattr`` guards against SDK
+    # versions/mocks/partial-shape objects that may omit these attributes;
+    # without it an AttributeError on ``list_models()`` would kill model
+    # discovery for the entire process and silently fall the cache to the
+    # shape-only Layer-1 gate.
+    supported_efforts = getattr(sdk_model, "supported_reasoning_efforts", None)
     supported_reasoning_efforts: tuple[str, ...] = ()
     if supported_efforts is not None:
         supported_reasoning_efforts = tuple(supported_efforts)
+    default_reasoning_effort = getattr(sdk_model, "default_reasoning_effort", None)
 
     return CopilotModelInfo(
         id=sdk_model.id,
@@ -142,5 +147,5 @@ def sdk_model_to_copilot_model(sdk_model: Any) -> CopilotModelInfo:
         supports_vision=supports_vision,
         supports_reasoning_effort=supports_reasoning_effort,
         supported_reasoning_efforts=supported_reasoning_efforts,
-        default_reasoning_effort=sdk_model.default_reasoning_effort,
+        default_reasoning_effort=default_reasoning_effort,
     )

@@ -17,10 +17,35 @@ import re
 from types import SimpleNamespace
 from typing import Any, cast
 
+# Single canonical import for ConfigurationError. Convention from config_loader.py
+# / models.py / streaming.py: top-level only, never re-imported in function bodies.
+from ._compat import ConfigurationError
+
 # Contract: sdk-boundary:Membrane:MUST:1 — import from sdk_adapter package, not submodules
-from .sdk_adapter import CompletionRequest, extract_attachments_from_chat_request
+from .sdk_adapter import CompletionRequest, CopilotModelInfo, extract_attachments_from_chat_request
+from .security_redaction import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
+
+# Fallback allowlist used when the resolved CopilotModelInfo is unavailable
+# (cache miss / unknown model). Without this, any short string would be
+# forwarded to the SDK. Mirrors the SDK ReasoningEffort Literal as of v0.3.0.
+_REASONING_EFFORT_FALLBACK_ALLOWLIST: frozenset[str] = frozenset(
+    {"low", "medium", "high", "xhigh"}
+)
+
+# Echo-redaction guard for ConfigurationError messages. Rejected values are
+# rendered verbatim only if they match this token shape; anything else is
+# replaced with "<redacted; len=N>". The pattern excludes every known
+# credential shape (uppercase, hyphens, dots, '/', '=', '+', '%' all fail),
+# so machine secrets cannot leak through error reflection. Digits are allowed
+# inside the token to admit future SDK literal variants like "high2" without
+# false-redacting them; a leading digit is still rejected so PEM-style and
+# numeric-prefix secrets are out. Human passphrases that happen to fit are
+# out of scope: ChatRequest.reasoning_effort is typed Literal[...] at the
+# kernel boundary; routing a secret through it is a caller bug the type
+# system already rejects.
+_REASONING_EFFORT_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
 
 # Pattern matching synthetic role-marker format in user-controlled content.
 # Matches [WORD] where WORD is 2+ uppercase letters/underscores.
@@ -240,6 +265,24 @@ def convert_chat_request(
     # not max_tokens. Both Anthropic and OpenAI providers use request.max_output_tokens.
     max_tokens = getattr(request, "max_output_tokens", None)
 
+    # reasoning_effort is forwarded verbatim to the SDK; capability validation
+    # happens in provider.complete() via validate_reasoning_effort() once
+    # CopilotModelInfo is resolved. Contract: provider-protocol:complete:MUST:11.
+    # Empty string normalizes to None so downstream consumers can rely on `is
+    # None` semantics. Non-str non-None raises: kernel ChatRequest types this
+    # field as `str | None`, so other types are caller bugs that must surface.
+    raw_reasoning_effort = getattr(request, "reasoning_effort", None)
+    if raw_reasoning_effort is None or raw_reasoning_effort == "":
+        reasoning_effort: str | None = None
+    elif isinstance(raw_reasoning_effort, str):
+        reasoning_effort = raw_reasoning_effort
+    else:
+        raise ConfigurationError(
+            f"reasoning_effort must be str or None; got "
+            f"{type(raw_reasoning_effort).__name__}.",
+            provider="github-copilot",
+        )
+
     return CompletionRequest(
         prompt=prompt,
         model=model,
@@ -247,7 +290,118 @@ def convert_chat_request(
         attachments=attachments,
         system_message=system_message,
         max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
     )
+
+
+def _redact_reasoning_effort_for_log(value: str) -> str:
+    """Render ``value`` safely for inclusion in error messages and logs.
+
+    Returns the value verbatim only when it matches the well-formed token
+    pattern (lowercase ASCII letters / underscores, <= 16 chars). Anything
+    else is replaced with ``<redacted; len=N>`` so an injected secret
+    fragment cannot leak via a ConfigurationError text or log line.
+
+    Contract: provider-protocol:complete:MUST:11 (defense in depth)
+    """
+    if _REASONING_EFFORT_TOKEN_RE.match(value):
+        return repr(value)
+    return f"<redacted; len={len(value)}>"
+
+
+def validate_reasoning_effort(
+    reasoning_effort: str | None,
+    model_info: CopilotModelInfo | None,
+    *,
+    model_id: str,
+) -> str | None:
+    """Validate caller-supplied reasoning_effort against model capability.
+
+    Contract: provider-protocol:complete:MUST:11
+
+    Layer-1 pre-flight gate, called from ``provider.complete()`` after
+    ``CopilotModelInfo`` lookup but before any SDK call. Returns the value
+    unchanged on success; raises ``ConfigurationError`` on policy violation.
+
+    Validation lives here (not in the membrane) because the membrane
+    deliberately knows nothing about model capability metadata.
+
+    Behavior:
+        * empty/None → returns ``None``
+        * value not in the SDK literal allowlist
+          ``{"low","medium","high","xhigh"}`` → raises (universal shape gate;
+          rejects mixed-case and unknown tokens regardless of model_info;
+          value redacted in error message when it doesn't match the safe
+          token shape)
+        * model_info missing, value passes shape gate → returns value, defers
+          final per-model policy to SDK Layer-2 backstop (``errors.yaml:P4``)
+        * model_info present, ``supports_reasoning_effort=False`` → raises
+        * model_info present, non-empty
+          ``supported_reasoning_efforts`` excludes the value → raises
+        * model_info present, value accepted → returns value verbatim
+
+    Args:
+        reasoning_effort: Verbatim ``ChatRequest.reasoning_effort``.
+        model_info: Resolved capability descriptor; ``None`` on cache miss.
+        model_id: Effective model id, used in error messages.
+
+    Returns:
+        The validated string, or ``None`` when no effort was requested.
+
+    Raises:
+        ConfigurationError: Capability mismatch or value not in the active
+            allowlist.
+    """
+    if not reasoning_effort:
+        return None
+
+    safe = _redact_reasoning_effort_for_log(reasoning_effort)
+
+    # Universal shape gate. The SDK accepts only the fixed lowercase Literal
+    # set; any other token (mixed-case "High", typos, novel values, overlong
+    # strings) is rejected here regardless of model_info presence so the
+    # contract's mixed-case rejection clause holds even when
+    # supported_reasoning_efforts is empty. The redactor above ensures the
+    # error message never echoes a non-token-shape value verbatim.
+    if reasoning_effort not in _REASONING_EFFORT_FALLBACK_ALLOWLIST:
+        allowed = ", ".join(repr(v) for v in sorted(_REASONING_EFFORT_FALLBACK_ALLOWLIST))
+        raise ConfigurationError(
+            f"reasoning_effort={safe} for model {model_id!r} is not in the "
+            f"SDK literal allowlist (case-sensitive). Allowed values: {allowed}.",
+            provider="github-copilot",
+        )
+
+    if model_info is None:
+        # Defense-in-depth: redact model_id before logging. ChatRequest.model is
+        # caller-controlled; a misrouted secret would otherwise reach the log.
+        logger.info(
+            "[REQUEST_ADAPTER] No CopilotModelInfo for model=%s; deferring "
+            "final reasoning_effort validation to SDK backstop (Layer 2). "
+            "reasoning_effort=%s",
+            redact_sensitive_text(model_id),
+            safe,
+        )
+        return reasoning_effort
+
+    if not model_info.supports_reasoning_effort:
+        raise ConfigurationError(
+            f"Model {model_id!r} does not support reasoning_effort. "
+            f"Caller passed reasoning_effort={safe}; remove the "
+            f"field or pick a model whose capability descriptor advertises "
+            f"supports_reasoning_effort=True.",
+            provider="github-copilot",
+        )
+
+    allowlist = model_info.supported_reasoning_efforts
+    if allowlist and reasoning_effort not in allowlist:
+        allowed = ", ".join(repr(v) for v in allowlist)
+        raise ConfigurationError(
+            f"Model {model_id!r} does not support "
+            f"reasoning_effort={safe}. Allowed values: {allowed}.",
+            provider="github-copilot",
+        )
+
+    return reasoning_effort
 
 
 def extract_prompt_from_chat_request(request: Any) -> str:

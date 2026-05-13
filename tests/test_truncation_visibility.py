@@ -139,6 +139,7 @@ class TestConvertChatRequestMaxOutputTokens:
         request.tools = None
         request.attachments = None
         request.max_output_tokens = 256
+        request.reasoning_effort = None
 
         result = convert_chat_request(request)
 
@@ -155,6 +156,7 @@ class TestConvertChatRequestMaxOutputTokens:
         request.tools = None
         request.attachments = None
         request.max_output_tokens = None
+        request.reasoning_effort = None
 
         result = convert_chat_request(request)
 
@@ -320,10 +322,17 @@ class TestCorrectionPathClampsMaxTokens:
                 system_message: str | None = None,
                 tools: list[Any] | None = None,
                 max_tokens: int | None = None,
+                reasoning_effort: str | None = None,
             ) -> AsyncIterator[MockSDKSession]:
                 call_index_cell[0] += 1
                 idx = call_index_cell[0]
-                session_calls.append({"call": idx, "max_tokens": max_tokens})
+                session_calls.append(
+                    {
+                        "call": idx,
+                        "max_tokens": max_tokens,
+                        "reasoning_effort": reasoning_effort,
+                    }
+                )
                 text = fake_text if idx == 1 else clean_text
                 delta = SessionEvent(
                     type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
@@ -344,6 +353,7 @@ class TestCorrectionPathClampsMaxTokens:
         request.messages = [MagicMock(role="user", content="list the files")]
         request.attachments = None
         request.max_output_tokens = max_output_tokens
+        request.reasoning_effort = None
         # Non-empty tools → tools_available=True → fake-tool path active
         request.tools = [{"name": "bash", "description": "Run shell commands", "parameters": {}}]
         return request

@@ -331,14 +331,14 @@ class CopilotClientWrapper:
                 token = _resolve_token()
                 log_level = _resolve_sdk_log_level()
 
-                # SDK v0.2.0: Use SubprocessConfig instead of options dict
+                # SDK v0.3.0: SubprocessConfig replaces the v0.2.x options dict
                 if SubprocessConfig is not None and token:
                     config = SubprocessConfig(github_token=token, log_level=log_level)
-                    self._owned_client = CopilotClient(config)  # type: ignore[arg-type]
+                    self._owned_client = CopilotClient(config)
                 elif SubprocessConfig is not None and not token:
                     # No token but SubprocessConfig available - use with log_level only
                     config = SubprocessConfig(log_level=log_level)
-                    self._owned_client = CopilotClient(config)  # type: ignore[arg-type]
+                    self._owned_client = CopilotClient(config)
                 elif token and SubprocessConfig is None:
                     # Security P1-6: Fail closed when explicit token cannot be applied.
                     # An explicitly-provided token MUST NEVER be silently ignored.
@@ -353,7 +353,7 @@ class CopilotClientWrapper:
                     )
                 else:
                     # No token, no SubprocessConfig - use SDK default authentication
-                    self._owned_client = CopilotClient()  # type: ignore[arg-type]
+                    self._owned_client = CopilotClient()
 
                 logger.debug("[CLIENT] CopilotClient created for %s", caller)
 
@@ -459,6 +459,7 @@ class CopilotClientWrapper:
         system_message: str | None = None,
         tools: list[Any] | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[SessionHandle]:
         """Create an ephemeral session with proper cleanup.
 
@@ -481,7 +482,7 @@ class CopilotClientWrapper:
                         Contract: provider-protocol:complete:MUST:10
 
         Yields:
-            Raw SDK session (opaque Any)
+            SessionHandle: opaque façade wrapping the raw SDK session.
 
         Raises:
             Domain errors (from error_translation) on creation failure
@@ -531,7 +532,8 @@ class CopilotClientWrapper:
             logger.debug("[CLIENT] No tools provided, available_tools=[] blocks SDK built-ins")
         # Streaming MUST always be enabled for event-based tool capture
         session_config["streaming"] = True
-        # SDK v0.2.0: on_permission_request passed to create_session (not client constructor)
+        # SDK v0.3.0: on_permission_request belongs on create_session, not the
+        # client constructor. Contract: deny-destroy:PermissionRequest:MUST:1
         session_config["on_permission_request"] = deny_permission_request
 
         # Pass deny hook via session config 'hooks' key (correct SDK API).
@@ -564,10 +566,21 @@ class CopilotClientWrapper:
                 max_tokens,
             )
 
+        # Contract: provider-protocol:complete:MUST:11. Membrane passthrough:
+        # value has already been gated by validate_reasoning_effort() in the
+        # provider; we forward verbatim. SDK Literal rejection is translated
+        # by errors.yaml:P4 (Layer-2 backstop).
+        if reasoning_effort is not None:
+            session_config["reasoning_effort"] = reasoning_effort
+            logger.debug(
+                "[CLIENT] Forwarding reasoning_effort=%r to SDK session",
+                reasoning_effort,
+            )
+
         sdk_session = None
         try:
             logger.debug("[CLIENT] Creating session with model=%r", model)
-            # SDK v0.2.0: create_session uses kwargs, unpack config dict
+            # SDK v0.3.0: create_session accepts kwargs; unpack the config dict
             sdk_session = await client.create_session(**session_config)  # type: ignore[union-attr]
             logger.debug("[CLIENT] Session created: %s", getattr(sdk_session, "session_id", "?"))
         except Exception as e:
