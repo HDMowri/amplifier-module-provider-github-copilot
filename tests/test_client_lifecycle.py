@@ -284,6 +284,30 @@ class TestSessionConfigInvariants:
         assert mock_client.last_config["available_tools"] == []
 
     @pytest.mark.asyncio
+    async def test_session_config_does_not_forward_temperature(self) -> None:
+        """The provider MUST NOT forward a sampling temperature to the SDK.
+
+        github-copilot-sdk v0.3.0 does not expose a temperature kwarg on
+        either Client.create_session or CopilotSession.send. The provider
+        carries no temperature plumbing of its own. This test pins that
+        invariant: a future edit that silently re-introduces a temperature
+        key into session_config (e.g., by passing through ChatRequest.
+        temperature, or by accepting a v0.4 SDK kwarg without an explicit
+        decision) will turn this assertion red.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+
+        async with wrapper.session(model="gpt-4"):
+            pass
+
+        assert "temperature" not in mock_client.last_config
+
+    @pytest.mark.asyncio
     async def test_session_config_streaming_always_true(self) -> None:
         """streaming=True on every session.
 

@@ -139,7 +139,6 @@ class CompletionRequest:
         attachments: Image attachments (BlobAttachment dicts) for vision models.
         system_message: Optional system message for SDK session (mode: replace).
         max_tokens: Maximum tokens in response.
-        temperature: Sampling temperature.
 
     """
 
@@ -151,7 +150,6 @@ class CompletionRequest:
     attachments: list[dict[str, Any]] = field(default_factory=list)  # type: ignore[misc]
     system_message: str | None = None
     max_tokens: int | None = None
-    temperature: float | None = None
 
 
 @dataclass
