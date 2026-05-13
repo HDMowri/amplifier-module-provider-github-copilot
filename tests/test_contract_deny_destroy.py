@@ -61,7 +61,7 @@ class TestDenyHookNotConfigurable:
         """Contract: deny-destroy:DenyHook:MUST:3 - No config key can disable the deny hook.
 
         Expanded to check for broader patterns that could compromise sovereignty.
-        Reads Python config modules and errors.yaml (authoritative per council verdict).
+        Reads Python config modules and errors.yaml.
         """
         import importlib.resources
 
@@ -69,7 +69,7 @@ class TestDenyHookNotConfigurable:
 
         from amplifier_module_provider_github_copilot.config import _models as _models
 
-        # Load errors.yaml (authoritative source — kept as YAML per council verdict)
+        # Load errors.yaml (authoritative source for error pattern mappings)
         pkg = importlib.resources.files("amplifier_module_provider_github_copilot.config.data")
         errors_yaml_text = (pkg / "errors.yaml").read_text(encoding="utf-8")
         errors_data = yaml.safe_load(errors_yaml_text)

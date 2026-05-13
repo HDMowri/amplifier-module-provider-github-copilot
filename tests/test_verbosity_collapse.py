@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # =============================================================================
-# Contract field-name assertions (LISKOV: exact field, exact value, exact type)
+# Contract field-name assertions: exact field, exact value, exact type.
 # =============================================================================
 
 
@@ -82,7 +82,7 @@ class TestObservabilityConfigFieldNames:
 
 
 class TestProviderRawFlagParsing:
-    """_parse_raw_flag() strict boolean parsing (SCHNEIER: string inputs)."""
+    """_parse_raw_flag() strict boolean parsing of string inputs."""
 
     def test_provider_stores_raw_false_by_default(self) -> None:
         """Provider._raw defaults to False when config has no 'raw' key."""
@@ -125,7 +125,7 @@ class TestProviderRawFlagParsing:
 
 # =============================================================================
 # Emitted event payload shape — via full provider.complete() path
-# (BECK: test through complete(), assert old keys absent AND exact value)
+# Test through complete(): assert old keys absent AND exact value.
 # =============================================================================
 
 
@@ -256,7 +256,7 @@ class TestRawPayloadKeysInEvents:
     ) -> None:
         """config={'raw': 'false'} must NOT enable raw payloads.
 
-        SCHNEIER: bool('false')==True footgun prevention.
+        Regression: bool('false') == True footgun prevention.
         """
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator
@@ -287,7 +287,7 @@ class TestRawPayloadKeysInEvents:
     ) -> None:
         """raw=True on one provider instance must not affect a second instance.
 
-        SCHNEIER: no lru_cache singleton bleed from raw=True into raw=False provider.
+        Regression: no lru_cache singleton bleed from raw=True into raw=False provider.
         """
         from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
         from amplifier_module_provider_github_copilot.streaming import StreamingAccumulator

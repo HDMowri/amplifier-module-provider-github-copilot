@@ -97,7 +97,7 @@ class TestWSLDetection:
         get_platform_info.cache_clear()
 
         assert info.is_wsl is False
-        # SCHNEIER: verify Linux branch sets all required fields correctly
+        # Verify the Linux branch sets all required fields correctly.
         assert info.is_windows is False
         assert info.name == "Unix"
         assert info.cli_binary_name == "copilot"
