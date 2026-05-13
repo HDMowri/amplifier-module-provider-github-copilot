@@ -1,11 +1,12 @@
 # Contract: SDK Boundary (The Membrane)
 
 ## Version
-- **Current:** 1.4 (SDK v0.3.0 — PermissionRequestResult field removal, kind rename)
+- **Current:** 1.5 (SDK v0.3.0 — SessionHandle façade pattern aligned end-to-end)
 - **Module Reference:** amplifier_module_provider_github_copilot/sdk_adapter/
 - **Status:** Non-Negotiable Constraint
-- **Update:** 2026-04-04 — SDK v0.3.0: PermissionRequestResult reduced to kind-only; kind values renamed
+- **Update:** 2026-05-13 — SessionHandle façade contract aligned with implementation; `Types:MUST:4..7` registered.
 - **History:**
+  - **1.5** — `SessionHandle` reframed as a façade delegating `on`/`send`/`abort` to a private `_raw_session`; lifecycle (`connect`/`disconnect`/`destroy`) owned by `client.session()` (`sdk_adapter/client.py`). Four normative bullets registered as `Types:MUST:4..7` covering `_raw_session` privacy, narrow surface, no lifecycle on handle, and construction-time `session_id` capture. Anchor IDs `:1..:3` unchanged.
   - **1.4** — SDK v0.3.0: `PermissionRequestResult` fields `rules`/`feedback`/`message`/`path` removed; kind literals renamed (`denied-by-rules` → `reject`, etc.). Fallback chains collapsed to direct imports (`copilot` for SubprocessConfig, `copilot.session` for PermissionRequestResult). `make_permission_denied()` factory added to `_imports.py`; `client.py` now expresses intent only.
   - **1.3** — SDK v0.2.1: copilot/types.py deleted. Multi-level fallback required for any type that lived there.
   - **1.2** — SDK v0.2.0 API: SubprocessConfig, create_session kwargs, send(prompt)
@@ -122,7 +123,7 @@ from amplifier_module_provider_github_copilot.sdk_adapter import get_copilot_spe
 1. **MUST** translate SDK types to domain types at the boundary
 2. **MUST** use decomposition, not wrapping
 3. **MUST NOT** pass SDK types through the boundary
-4. **MUST** use opaque handles (strings) instead of SDK object references
+4. **MUST** expose only opaque domain handles (façade objects whose private state is hidden behind a stable, narrow surface) — never raw SDK object references
 
 ### Decomposition Pattern
 
@@ -134,11 +135,21 @@ class SessionWrapper:
         self._session = sdk_session  # SDK type stored
 ```
 
-**RIGHT — Decomposition:**
+**RIGHT — Decomposition (façade + decomposed events):**
 ```python
-# ✓ SDK type decomposed to domain primitives
-SessionHandle = str  # Opaque UUID, not SDK reference
+# ✓ Façade hides the SDK session; raw reference is private
+class SessionHandle:
+    __slots__ = ("_raw_session", "session_id")
 
+    def __init__(self, raw_session: Any, session_id: str | None = None) -> None:
+        self._raw_session = raw_session  # private — never exposed
+        self.session_id = session_id or getattr(raw_session, "session_id", "unknown")
+
+    def on(self, handler: Callable[[Any], None]) -> Callable[[], None]: ...
+    async def send(self, prompt: str, *, attachments: list[dict[str, Any]] | None = None) -> None: ...
+    async def abort(self) -> None: ...
+
+# ✓ SDK event decomposed to domain primitives
 @dataclass
 class DomainEvent:
     type: str
@@ -152,13 +163,21 @@ class DomainEvent:
 ### SessionHandle
 
 ```python
-# Opaque handle — UUID string, NOT SDK session reference
-SessionHandle = str
+# Façade class wrapping the raw SDK session.
+# NOT a string alias and NOT a registry-keyed entry — both patterns
+# leak SDK-session ownership across the membrane (see "Why not a
+# string alias?" rationale below).
+class SessionHandle:
+    __slots__ = ("_raw_session", "session_id")
+    # on / send / abort delegate to the private _raw_session
 ```
 
-- **MUST** be generated UUID, not SDK session ID
-- **MUST NOT** be the actual SDK session object
-- **MUST** map to SDK session via internal registry
+- `Types:MUST:4` — **MUST** keep `_raw_session` private: no public attribute, no accessor returning it (`sdk_adapter/types.py:74,83`).
+- `Types:MUST:5` — **MUST** expose only `on(handler) → unsubscribe`, `await send(prompt, *, attachments=None)`, `await abort()`, plus the attribute `session_id: str` (`sdk_adapter/types.py:86-120`).
+- `Types:MUST:6` — **MUST NOT** expose lifecycle (`connect` / `disconnect` / `destroy` / `close`) on the handle; lifecycle is owned by the `client.session()` async context manager in `sdk_adapter/client.py`.
+- `Types:MUST:7` — **MUST** assign `session_id` exactly once in `__init__` from the raw SDK session (`copilot.session.CopilotSession.session_id`); provider code MUST NOT reassign it. Callers **SHOULD** treat it as read-only — `__slots__` constrains attribute names but does not block reassignment of declared slots; a `__setattr__` guard or `frozen` dataclass is tracked as a code-level follow-up.
+
+> **Why not a string alias?** A string-only handle forces an internal SDK-session registry, which leaks lifetime ownership across the membrane and complicates abort/cleanup. The façade pattern colocates the raw reference with its narrow surface, keeps the membrane self-contained, and matches the implementation at `sdk_adapter/types.py:61-120`. See `TypeTranslation:MUST:3` and `TypeTranslation:MUST:4`.
 
 ### DomainEvent
 
@@ -466,7 +485,11 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 |--------|--------|
 | `sdk-boundary:Types:MUST:1` | No SDK types cross boundary |
 | `sdk-boundary:Types:MUST:2` | Domain types are dataclasses/primitives |
-| `sdk-boundary:Types:MUST:3` | SessionHandle is opaque string |
+| `sdk-boundary:Types:MUST:3` | SessionHandle is a domain façade hiding the raw SDK session; raw session must not leak through `client.session()` |
+| `sdk-boundary:Types:MUST:4` | `SessionHandle._raw_session` is private; no public attribute or accessor exposes it |
+| `sdk-boundary:Types:MUST:5` | `SessionHandle` public surface is exactly `on`, `send`, `abort`, `session_id` |
+| `sdk-boundary:Types:MUST:6` | `SessionHandle` does not expose `connect`/`disconnect`/`destroy`/`close`; lifecycle owned by `client.session()` |
+| `sdk-boundary:Types:MUST:7` | `SessionHandle.session_id` assigned once in `__init__` from raw SDK session; provider code does not reassign it (read-only enforcement is a code-level follow-up) |
 
 ### Translation
 
@@ -482,7 +505,7 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | `sdk-boundary:TypeTranslation:MUST:1` | SDK types translated to domain types at boundary |
 | `sdk-boundary:TypeTranslation:MUST:2` | Mock sessions deliver SessionEvent objects to handlers |
 | `sdk-boundary:TypeTranslation:MUST:3` | SessionHandle wraps the raw SDK session; raw session must not be directly exposed to callers |
-| `sdk-boundary:TypeTranslation:MUST:4` | SessionHandle delegates on() and close() to raw_session without leaking SDK types |
+| `sdk-boundary:TypeTranslation:MUST:4` | SessionHandle delegates `on()`, `send()`, and `abort()` to the raw SDK session without leaking SDK types; session lifecycle (connect / disconnect / destroy) is owned by the `client.session()` async context manager and MUST NOT be exposed on SessionHandle |
 | `sdk-boundary:TypeTranslation:SHOULD:1` | Mock sessions accept legacy dict events for backward compat |
 
 ### Config
@@ -537,7 +560,7 @@ Model discovery MUST fetch models dynamically from the SDK backend. The provider
 
 ```
 SDK ModelInfo          →  CopilotModelInfo       →  amplifier_core.ModelInfo
-(copilot.types)           (internal isolation)      (kernel expects this)
+(copilot.client)          (internal isolation)      (kernel expects this)
 ```
 
 **Why Three Types?**
@@ -548,7 +571,7 @@ SDK ModelInfo          →  CopilotModelInfo       →  amplifier_core.ModelInfo
 ### Type Translation
 
 ```python
-# SDK ModelInfo (from copilot.types) — INPUT
+# SDK ModelInfo (from copilot.client) — INPUT
 @dataclass
 class ModelInfo:
     id: str
