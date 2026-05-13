@@ -217,7 +217,7 @@ def main() -> int:
 Examples:
   python scripts/smoke_test.py              # Quick test
   python scripts/smoke_test.py --verbose    # Detailed output (shows model list)
-  
+
 For full completion testing, use:
   pytest tests/ -q --tb=short
         """,

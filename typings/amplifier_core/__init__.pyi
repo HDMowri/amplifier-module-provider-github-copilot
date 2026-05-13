@@ -4,29 +4,26 @@ These stubs satisfy pyright strict mode.
 The actual types come from the amplifier-core package at runtime.
 """
 
-from typing import Any, Protocol
 from dataclasses import dataclass
+from typing import Any, Protocol
 
 # Re-export submodule stubs
-from .llm_errors import (
-    AbortError as AbortError,
-    AccessDeniedError as AccessDeniedError,
-    AuthenticationError as AuthenticationError,
-    ConfigurationError as ConfigurationError,
-    ContentFilterError as ContentFilterError,
-    ContextLengthError as ContextLengthError,
-    InvalidRequestError as InvalidRequestError,
-    InvalidToolCallError as InvalidToolCallError,
-    LLMError as LLMError,
-    LLMTimeoutError as LLMTimeoutError,
-    NetworkError as NetworkError,
-    NotFoundError as NotFoundError,
-    ProviderUnavailableError as ProviderUnavailableError,
-    QuotaExceededError as QuotaExceededError,
-    RateLimitError as RateLimitError,
-    StreamError as StreamError,
-)
-
+from .llm_errors import AbortError as AbortError
+from .llm_errors import AccessDeniedError as AccessDeniedError
+from .llm_errors import AuthenticationError as AuthenticationError
+from .llm_errors import ConfigurationError as ConfigurationError
+from .llm_errors import ContentFilterError as ContentFilterError
+from .llm_errors import ContextLengthError as ContextLengthError
+from .llm_errors import InvalidRequestError as InvalidRequestError
+from .llm_errors import InvalidToolCallError as InvalidToolCallError
+from .llm_errors import LLMError as LLMError
+from .llm_errors import LLMTimeoutError as LLMTimeoutError
+from .llm_errors import NetworkError as NetworkError
+from .llm_errors import NotFoundError as NotFoundError
+from .llm_errors import ProviderUnavailableError as ProviderUnavailableError
+from .llm_errors import QuotaExceededError as QuotaExceededError
+from .llm_errors import RateLimitError as RateLimitError
+from .llm_errors import StreamError as StreamError
 
 @dataclass
 class ModelInfo:
@@ -53,7 +50,7 @@ class ProviderInfo:
     credential_env_vars: list[str]
     capabilities: list[str]
     defaults: dict[str, Any]
-    config_fields: list["ConfigField"]
+    config_fields: list[ConfigField]
 
 
 @dataclass
@@ -79,14 +76,14 @@ class ChatRequest:
     temperature: float | None = None
     routing_model: str | None = None
     attachments: list[Any] | None = None
-    
+
 
 @dataclass
 class ChatResponse:
     """Response from chat completion."""
     content: list[Any]
-    tool_calls: list["ToolCall"] | None = None
-    usage: "Usage | None" = None
+    tool_calls: list[ToolCall] | None = None
+    usage: Usage | None = None
     finish_reason: str | None = None
     metadata: dict[str, Any] | None = None
     # Additional fields used by tests/streaming
@@ -113,14 +110,22 @@ class ToolCallBlock:
     name: str
     input: dict[str, Any]
 
-    def __init__(self, *, type: str = "tool_call", id: str, name: str, input: dict[str, Any], **kwargs: Any) -> None: ...
+    def __init__(
+        self,
+        *,
+        type: str = "tool_call",
+        id: str,
+        name: str,
+        input: dict[str, Any],
+        **kwargs: Any,
+    ) -> None: ...
 
 
 class TextBlock:
     """Text block for Pydantic context persistence (Pydantic BaseModel)."""
     type: str
     text: str
-    
+
     def __init__(self, *, text: str, type: str = "text", **kwargs: Any) -> None: ...
 
 
@@ -129,8 +134,15 @@ class ThinkingBlock:
     type: str
     thinking: str
     signature: str | None
-    
-    def __init__(self, *, thinking: str, type: str = "thinking", signature: str | None = None, **kwargs: Any) -> None: ...
+
+    def __init__(
+        self,
+        *,
+        thinking: str,
+        type: str = "thinking",
+        signature: str | None = None,
+        **kwargs: Any,
+    ) -> None: ...
 
 
 @dataclass
@@ -181,9 +193,9 @@ class HooksProtocol(Protocol):
 
 class ModuleCoordinator:
     """Coordinator for provider module lifecycle."""
-    
+
     hooks: HooksProtocol
-    
+
     async def mount(
         self,
         category: str,
@@ -197,7 +209,7 @@ class ModuleCoordinator:
 __all__ = [
     # Core types
     "ModelInfo",
-    "ProviderInfo", 
+    "ProviderInfo",
     "ConfigField",
     "ChatRequest",
     "ChatResponse",
