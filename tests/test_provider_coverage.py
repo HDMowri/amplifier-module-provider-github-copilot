@@ -88,6 +88,7 @@ def _create_mock_request(model: str = "gpt-4o") -> MagicMock:
     request.tools = None
     request.attachments = None
     request.max_output_tokens = None  # canonical ChatRequest field (not max_tokens)
+    request.reasoning_effort = None
     return request
 
 
@@ -125,6 +126,8 @@ class TestRetryWithEventualSuccess:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                mode: object | None = None,
+                request_headers: dict[str, str] | None = None,
             ) -> str:
                 nonlocal attempt_count
                 attempt_count += 1
@@ -180,6 +183,8 @@ class TestRetryWithEventualSuccess:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                mode: object | None = None,
+                request_headers: dict[str, str] | None = None,
             ) -> str:
                 nonlocal attempt_count
                 attempt_count += 1
@@ -660,6 +665,8 @@ class TestQueueFullHandling:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                mode: object | None = None,
+                request_headers: dict[str, str] | None = None,
             ) -> str:
                 self.last_prompt = prompt
                 for event in flood_events:
@@ -724,6 +731,8 @@ class TestFakeToolDetectionRetry:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                mode: object | None = None,
+                request_headers: dict[str, str] | None = None,
             ) -> str:
                 nonlocal correction_attempt
                 correction_attempt += 1
@@ -787,6 +796,8 @@ class TestFakeToolDetectionRetry:
                 prompt: str,
                 *,
                 attachments: list[dict[str, Any]] | None = None,
+                mode: object | None = None,
+                request_headers: dict[str, str] | None = None,
             ) -> str:
                 nonlocal attempt
                 attempt += 1

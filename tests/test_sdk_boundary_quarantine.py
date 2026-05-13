@@ -155,6 +155,13 @@ class TestSDKImportsRealPath:
 
         SDK v0.3.0 canonical location: copilot.session.
         Direct import — no fallback chain.
+
+        Note: this test uses ``sys.modules`` ``MagicMock`` patching to verify
+        the import *structure* of the quarantine membrane. The companion
+        live-SDK signature/path validation lives in
+        ``tests/test_sdk_assumptions.py`` (``@pytest.mark.sdk_assumption``),
+        which exercises the real ``copilot.*`` modules end-to-end. Both files
+        together form the full boundary contract.
         """
         # Contract: sdk-boundary:ImportQuarantine:MUST:6
         original_skip, original_module = self._save_import_state()

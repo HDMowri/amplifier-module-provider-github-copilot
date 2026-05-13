@@ -31,7 +31,7 @@ This contract ensures the provider remains testable, maintainable, and isolated 
 3. **MUST NOT** allow SDK imports in ANY module outside `sdk_adapter/`
 4. **MUST NOT** export SDK types from `sdk_adapter/__init__.py`
 5. **MUST** fail at import time with a clear error if `github-copilot-sdk` is not installed (eager dependency check)
-6. **MUST** use direct imports for the currently pinned SDK version. Multi-level fallback chains are only needed when supporting a version range that spans a breaking import reorganisation. With `>=0.3.0,<0.4.0`, the canonical locations are: `SubprocessConfig` from `copilot` root, `PermissionRequestResult` from `copilot.session`. If an import moves in a future version, update the pin AND the import together.
+6. **MUST** use direct imports for the currently pinned SDK version. Multi-level fallback chains are only needed when supporting a version range that spans a breaking import reorganisation. With `>=0.3.0,<0.4.0`, the canonical locations are: `CopilotClient` and `SubprocessConfig` from `copilot` root (defined in `copilot.client`, re-exported at root); `PermissionRequestResult` from `copilot.session`. `ReasoningEffort` and `PermissionRequestResultKind` are not directly imported by the provider — they are exercised via string-literal `kind=` arguments. If an import moves in a future version, update the pin AND the import together.
 7. **MUST** encapsulate SDK constructor calls — including field names and Literal values — inside `_imports.py`. Other modules call factories (e.g., `make_permission_denied()`), not SDK constructors directly.
 
 ### SDK Version History (Import Changes)
@@ -476,8 +476,24 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 
 | Anchor | Clause |
 |--------|--------|
-| `sdk-boundary:ImportQuarantine:MUST:6` | Direct imports for pinned SDK version — no fallback chains (SubprocessConfig from copilot root, PermissionRequestResult from copilot.session) |
+| `sdk-boundary:ImportQuarantine:MUST:6` | Direct imports for pinned SDK version — no fallback chains (`CopilotClient` and `SubprocessConfig` from `copilot` root [defined in `copilot.client`, re-exported at root]; `PermissionRequestResult` from `copilot.session`). `ReasoningEffort` and `PermissionRequestResultKind` are not directly imported — they are exercised via string-literal `kind=` arguments. |
 | `sdk-boundary:ImportQuarantine:MUST:7` | SDK constructor calls encapsulated in _imports.py via factory (make_permission_denied); client.py expresses intent only |
+
+### SDKSurface (v0.3.0 shape pins)
+
+These anchors pin specific shapes of the SDK v0.3.0 public surface that the
+provider's stubs (`typings/copilot/`) and translation code rely on. A test
+under each anchor lives in `tests/test_sdk_assumptions.py` and turns red if
+the live SDK surface drifts.
+
+| Anchor | Clause |
+|--------|--------|
+| `sdk-boundary:SDKSurface:MUST:1` | `copilot.session.PermissionRequestResultKind` is a Literal of exactly `{"approve-once", "reject", "user-not-available", "no-result"}`; `PermissionRequestResult` carries only `kind` (the v0.2.x fields `rules`, `feedback`, `message`, `path` are absent) |
+| `sdk-boundary:SDKSurface:MUST:2` | `copilot.session.ReasoningEffort` is the same object (identity, not just equal) as `copilot.client.ReasoningEffort` |
+| `sdk-boundary:SDKSurface:MUST:3` | `copilot.ModelSupportsOverride` is a dataclass with field tuple `("vision", "reasoning_effort")`, all defaults `None` |
+| `sdk-boundary:SDKSurface:MUST:4` | `copilot.ModelVisionLimitsOverride` is a dataclass with field tuple `("supported_media_types", "max_prompt_images", "max_prompt_image_size")`, all defaults `None` |
+| `sdk-boundary:SDKSurface:MUST:5` | `copilot.session.CopilotSession.workspace_path` is a `functools.cached_property` |
+| `sdk-boundary:SDKSurface:MUST:6` | `copilot.session.CopilotSession.send` accepts exactly the kwargs `{"prompt", "attachments", "mode", "request_headers"}` (positional `prompt`, three keyword-only) so the test mock signature in `tests/fixtures/sdk_mocks.py` and the provider call sites in `sdk_adapter/client.py` stay synchronised with the live SDK |
 
 ### Types
 
@@ -528,7 +544,7 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | `sdk-boundary:ModelDiscovery:MUST:3` | Translates CopilotModelInfo → amplifier_core.ModelInfo |
 | `sdk-boundary:ModelDiscovery:MUST_NOT:1` | No hardcoded model lists |
 
-### SDK API Assumptions (SDK v0.2.0)
+### SDK API Assumptions (SDK v0.3.0)
 
 | Anchor | Clause |
 |--------|--------|

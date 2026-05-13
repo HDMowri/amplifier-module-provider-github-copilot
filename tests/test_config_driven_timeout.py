@@ -69,6 +69,7 @@ class TestModuleLevelCompleteTimeout:
         request.messages = [MagicMock(role="user", content="test")]
         request.tools = None
         request.max_output_tokens = None
+        request.reasoning_effort = None
         request.temperature = None
         request.stop = None
         request.stream = None
@@ -132,6 +133,8 @@ class TestTimeoutEnforcement:
                 prompt: str,
                 *,
                 attachments: list[dict] | None = None,
+                mode: object | None = None,
+                request_headers: dict[str, str] | None = None,
             ) -> str:
                 self.last_prompt = prompt
                 await asyncio.sleep(60)  # cancelled by asyncio.timeout()
@@ -157,6 +160,7 @@ class TestTimeoutEnforcement:
         request.messages = [MagicMock(role="user", content="test")]
         request.tools = None
         request.max_output_tokens = None
+        request.reasoning_effort = None
         request.temperature = None
         request.stop = None
         request.stream = None

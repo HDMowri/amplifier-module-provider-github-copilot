@@ -53,6 +53,7 @@ def _make_request(*, tools: list[Any] | None = None) -> MagicMock:
     request.tools = tools
     request.attachments = None
     request.max_output_tokens = None
+    request.reasoning_effort = None
     return request
 
 
@@ -68,6 +69,8 @@ class FakeToolTextSession(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        mode: object | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> str:
         self.last_prompt = prompt
         fake_event = SessionEvent(
@@ -95,6 +98,8 @@ class CancelOnSecondSendSession(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        mode: object | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> str:
         self._send_count += 1
         if self._send_count == 1:
@@ -132,6 +137,7 @@ class CountingSessionWrapper:
         system_message: str | None = None,
         tools: list[Any] | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[MockSDKSession]:
         """Each time session() is called, the same CancelOnSecondSendSession is used,
         but that session's send_count also increments for each send() call."""
@@ -441,6 +447,8 @@ class UsageInjectionSession(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        mode: object | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> str:
         self.last_prompt = prompt
         # Fire assistant.usage → populates usage_holder, goes into queue
@@ -531,6 +539,8 @@ class ToolThenIdleSession(MockSDKSession):
         prompt: str,
         *,
         attachments: list[dict[str, Any]] | None = None,
+        mode: object | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> str:
         self.last_prompt = prompt
         # 1. Tool request event (populates tool_capture_handler.captured_tools

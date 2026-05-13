@@ -41,7 +41,7 @@ def _extract_delta_text(sdk_event: Any) -> str | None:
 
     Contract: streaming-contract:ProgressiveStreaming:SHOULD:1
 
-    Handles SDK v0.2.0 nested data structure:
+    Handles SDK v0.3.0 nested data structure:
     - event.data.delta_content for text deltas
     - Direct string content as fallback
 
@@ -51,7 +51,7 @@ def _extract_delta_text(sdk_event: Any) -> str | None:
     Returns:
         Extracted text delta or None if not found
     """
-    # Try nested data structure first (SDK v0.2.0+)
+    # Try nested data structure first (SDK v0.3.0)
     sdk_data = getattr(sdk_event, "data", None)
     if sdk_data is not None:
         delta_content = getattr(sdk_data, "delta_content", None)

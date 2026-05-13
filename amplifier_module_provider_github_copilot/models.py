@@ -8,7 +8,7 @@ Two-Medium Architecture:
 
 Type Translation Chain:
     SDK ModelInfo → CopilotModelInfo → amplifier_core.ModelInfo
-    (copilot.types)   (isolation layer)   (kernel contract)
+    (copilot.client)  (isolation layer)   (kernel contract)
 """
 
 from __future__ import annotations
