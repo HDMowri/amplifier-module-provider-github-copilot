@@ -644,8 +644,11 @@ class TestUsageEventHelpers:
             # subtraction even when the read bucket is inactive, so dropping
             # ``- (cache_write or 0)`` makes this row fail in isolation.
             pytest.param(64295, 473, 0, 64285, 10, id="write_only_no_read"),
-            # mixed_real_shape: numbers scaled from a captured SDK v0.3.0
-            # ``session.shutdown`` event (2026-05-17, model claude-sonnet-4.6)
+            # mixed_real_shape: numbers scaled from a captured SDK v1.0.0b4
+            # ``session.shutdown`` event (2026-05-17, model claude-sonnet-4.6,
+            # captured after commit ``eab7989`` bumped the SDK from v0.3.0 to
+            # v1.0.0b4 — the billing schema change in v1.0.0b4 is exactly what
+            # made the gross-total interpretation of ``inputTokens`` load-bearing)
             # whose ``modelMetrics`` block carries inputTokens=34554,
             # cacheReadTokens=26075, cacheWriteTokens=8475 with a sibling
             # ``tokenDetails.input.tokenCount=4``; the identity
@@ -843,9 +846,14 @@ class TestStreamingUIPercentageInvariantWithRealCapturedShapes:
     formula, produces a percentage in [0, 100].
 
     Shapes are CAPTURED FROM LIVE amplifier runs against the github-copilot SDK
-    (5 distinct production shapes; identities verified by replaying the kernel
-    formula). Each shape pairs the SDK-side raw fields with the kernel-mandated
-    post-transform result.
+    (4 distinct production shapes plus one defensive all-fields-None shape;
+    identities verified by replaying the kernel formula). Each shape pairs the
+    SDK-side raw fields with the kernel-mandated post-transform result.
+
+    Cited by ``extract_usage_data`` docstring in
+    ``amplifier_module_provider_github_copilot/sdk_adapter/event_helpers.py``
+    as the assistant.usage proof chain for streaming-contract:usage:MUST:3 --
+    keep class name in sync if renamed.
     """
 
     # Five live-captured shapes from `amplifier run` probe matrix:
@@ -911,7 +919,9 @@ class TestStreamingUIPercentageInvariantWithRealCapturedShapes:
                 assert (result.get("cache_read_tokens") or 0) == 0
             return
 
-        assert result is not None, f"shape={label}: extract_usage_data returned None"
+        assert isinstance(result, dict), (
+            f"shape={label}: extract_usage_data returned {type(result).__name__}, expected dict"
+        )
         assert result["input_tokens"] == exp_in, (
             f"shape={label}: post-transform input_tokens "
             f"expected {exp_in}, got {result['input_tokens']}"
@@ -963,7 +973,7 @@ class TestStreamingUIPercentageInvariantWithRealCapturedShapes:
                 }
             }
             result = extract_usage_data(event)
-            assert result is not None
+            assert isinstance(result, dict)
             it = result["input_tokens"] or 0
             cw = result.get("cache_write_tokens") or 0
             assert it + cw == sdk_in, (
@@ -989,7 +999,7 @@ class TestStreamingUIPercentageInvariantWithRealCapturedShapes:
             }
         }
         result = extract_usage_data(event)
-        assert result is not None
+        assert isinstance(result, dict)
         assert result["input_tokens"] == 53611, "no-cache shape: input must pass through unchanged"
         assert result["cache_read_tokens"] == 0
         assert result["cache_write_tokens"] == 0
@@ -1017,7 +1027,7 @@ class TestStreamingUIPercentageInvariantWithRealCapturedShapes:
             }
         }
         result = extract_usage_data(event)
-        assert result is not None
+        assert isinstance(result, dict)
         assert result["input_tokens"] == 10, (
             "haiku write-only first turn: post-transform input = sdk_input - cache_write"
         )

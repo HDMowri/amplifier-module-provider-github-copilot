@@ -150,8 +150,11 @@ def extract_usage_data(sdk_event: Any) -> dict[str, int | None] | None:
       v0.3.0 docs (``copilot-sdk/v0.3.0/docs/features/streaming-events.md``)
       describe each field neutrally and do not state whether the cache
       buckets are included in ``inputTokens`` or additive to it. A captured
-      SDK v0.3.0 ``session.shutdown`` event (model ``claude-sonnet-4.6``,
-      2026-05-17) reports ``inputTokens=34554``, ``cacheReadTokens=26075``,
+      SDK v1.0.0b4 ``session.shutdown`` event (model ``claude-sonnet-4.6``,
+      2026-05-17, captured after commit ``eab7989`` bumped the SDK from
+      v0.3.0 to v1.0.0b4 — the billing schema change in v1.0.0b4 is exactly
+      what made the gross-total interpretation of ``inputTokens`` load-bearing)
+      reports ``inputTokens=34554``, ``cacheReadTokens=26075``,
       ``cacheWriteTokens=8475`` alongside a sibling ``tokenDetails`` block
       with ``input.tokenCount=4``. The arithmetic identity
       ``4 + 26075 + 8475 == 34554`` is direct empirical proof that
@@ -166,6 +169,18 @@ def extract_usage_data(sdk_event: Any) -> dict[str, int | None] | None:
       double-remove it. The resulting value is compatible with the
       streaming-ui hook's display total, which adds ``cache_write_tokens``
       on top of the kernel ``input_tokens`` per the same kernel contract.
+      The ``session.shutdown`` event above gives the *direct* arithmetic
+      proof because it carries a sibling ``tokenDetails.input.tokenCount=4``
+      field. ``assistant.usage`` events (the event type this function
+      actually processes) do not carry ``tokenDetails``, so the same
+      gross-total identity is verified end-to-end against four
+      production-captured ``assistant.usage`` shapes (plus one defensive
+      all-fields-None shape) in ``tests/test_event_classification_overlap.py``
+      (``TestStreamingUIPercentageInvariantWithRealCapturedShapes``); each
+      non-degenerate shape asserts the round-trip
+      ``input_tokens + (cache_write_tokens or 0) == sdk_inputTokens`` and
+      the resulting streaming-ui denominator invariant
+      ``denom >= cache_read_tokens``.
       Formula: ``max(0, sdk_inputTokens - (cache_write_tokens or 0))``.
     * ``output_tokens`` (int, required) — output tokens generated.
     * ``total_tokens`` (int, required) — ``input_tokens + output_tokens``.
