@@ -166,11 +166,28 @@ class TestBridgeEventDataShape:
         )
 
     def test_usage_token_fields_at_top_level(self) -> None:
-        """USAGE_UPDATE DomainEvent.data must have token fields at the top level.
+        """USAGE_UPDATE DomainEvent.data must have token fields at the top level
+        AND ``input_tokens`` MUST already be in the kernel-mandated gross shape
+        (cache_write subtracted) when it leaves ``translate_event``.
 
-        Contract: event-vocabulary:Bridge:MUST:3
+        Contracts:
+          - event-vocabulary:Bridge:MUST:3 (top-level promotion)
+          - streaming-contract:usage:MUST:3 (cache_write subtraction)
+
         Rationale: StreamingAccumulator stores event.data directly as self.usage;
-        token fields buried under a nested 'data' key produce silent zero usage counts.
+        token fields buried under a nested 'data' key produce silent zero usage
+        counts. Additionally, ``translate_event`` MUST route assistant.usage
+        through ``extract_usage_data`` so the kernel-shape transform (subtract
+        cache_write, leave cache_read inside input_tokens) is applied before
+        the DomainEvent reaches the accumulator. The mixed-cache fixture
+        below would silently regress if a future refactor bypassed
+        ``extract_usage_data`` on the USAGE_UPDATE branch.
+
+        Sibling caller: ``event_router.py`` (immediate usage capture for the
+        idle-race window) also routes through ``extract_usage_data`` and is
+        therefore covered transitively. The helper's own dict-vs-object paths,
+        cache-only / write-only / mixed shapes, and the ``max(0, ...)`` clamp
+        are exercised directly in ``test_event_classification_overlap.py``.
         """
         from amplifier_module_provider_github_copilot.streaming import (
             DomainEvent,
@@ -180,23 +197,40 @@ class TestBridgeEventDataShape:
         )
 
         config = load_event_config()
+        # Mixed-cache shape (cache_read > 0 AND cache_write > 0) exercises both
+        # contracts in a single payload: 17 - 7 = 10 (subtract only cache_write;
+        # cache_read=3 stays inside input_tokens).
         sdk_event = {
             "type": "assistant.usage",
-            "data": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+            "data": {
+                "input_tokens": 17,
+                "output_tokens": 20,
+                "total_tokens": 37,
+                "cache_read_tokens": 3,
+                "cache_write_tokens": 7,
+            },
         }
         result = translate_event(sdk_event, config)
 
         assert isinstance(result, DomainEvent)
         assert result.type == DomainEventType.USAGE_UPDATE
-        # MUST:3 — no residual 'data' key; all token fields at top level
+        # Bridge:MUST:3 — no residual 'data' key; all token fields at top level
         assert "data" not in result.data, (
             "translate_event MUST NOT leave a nested 'data' key in DomainEvent.data"
         )
+        # usage:MUST:3 — input_tokens already cache_write-subtracted at this layer
         assert result.data["input_tokens"] == 10, (
-            "translate_event MUST promote nested usage token fields to the top level"
+            "translate_event MUST route USAGE_UPDATE through extract_usage_data; "
+            f"expected input_tokens=10 (=17-7), got {result.data['input_tokens']}"
         )
         assert result.data["output_tokens"] == 20
-        assert result.data["total_tokens"] == 30
+        # total_tokens recomputed against the post-subtraction input
+        assert result.data["total_tokens"] == 30, (
+            "total_tokens MUST equal input_tokens + output_tokens after subtraction"
+        )
+        # Bridge:MUST:3 — cache fields forwarded
+        assert result.data["cache_read_tokens"] == 3
+        assert result.data["cache_write_tokens"] == 7
 
     def test_sdk_object_in_data_not_preserved(self) -> None:
         """When sdk_event contains a raw SDK data object, it must not appear in DomainEvent.data

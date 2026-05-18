@@ -143,21 +143,36 @@ def extract_usage_data(sdk_event: Any) -> dict[str, int | None] | None:
 
     Fields returned:
 
-    * ``input_tokens`` (int, required) — **fresh (uncacheable) tokens only**.
-      The Copilot SDK's ``assistant.usage`` event reports ``input_tokens`` as the
-      billing total (``fresh + cache_read + cache_write``). The kernel
-      ``Usage.input_tokens`` convention — established by the Anthropic provider
-      and consumed by the Amplifier streaming UI — defines this field as the
-      fresh/uncacheable portion only. The streaming UI computes the display total
-      as ``input_tokens + cache_read + cache_write``, so subtracting both cache
-      buckets means the display exactly recovers the SDK billing total.
-      Formula: ``max(0, sdk_input_tokens - cache_read_tokens - cache_write_tokens)``.
+    * ``input_tokens`` (int, required) — equal to the SDK ``inputTokens`` field
+      minus ``cacheWriteTokens`` (treated as ``0`` when absent or ``None``).
+      The Copilot SDK reports four token fields (``inputTokens``,
+      ``outputTokens``, ``cacheReadTokens``, ``cacheWriteTokens``); the SDK
+      v0.3.0 docs (``copilot-sdk/v0.3.0/docs/features/streaming-events.md``)
+      describe each field neutrally and do not state whether the cache
+      buckets are included in ``inputTokens`` or additive to it. A captured
+      SDK v0.3.0 ``session.shutdown`` event (model ``claude-sonnet-4.6``,
+      2026-05-17) reports ``inputTokens=34554``, ``cacheReadTokens=26075``,
+      ``cacheWriteTokens=8475`` alongside a sibling ``tokenDetails`` block
+      with ``input.tokenCount=4``. The arithmetic identity
+      ``4 + 26075 + 8475 == 34554`` is direct empirical proof that
+      ``inputTokens`` is the gross billing total
+      ``fresh + cacheReadTokens + cacheWriteTokens``. The kernel ``Usage``
+      schema (``amplifier-core`` ``docs/contracts/PROVIDER_CONTRACT.md``
+      ``llm:response``) requires ``input_tokens`` to be the gross-total form
+      that excludes ``cache_write_tokens`` (i.e. ``fresh + cache_read``),
+      treating ``cache_write_tokens`` as a separate additive bucket billed
+      on top. Subtracting only ``cacheWriteTokens`` produces that
+      kernel-mandated shape; subtracting ``cacheReadTokens`` would
+      double-remove it. The resulting value is compatible with the
+      streaming-ui hook's display total, which adds ``cache_write_tokens``
+      on top of the kernel ``input_tokens`` per the same kernel contract.
+      Formula: ``max(0, sdk_inputTokens - (cache_write_tokens or 0))``.
     * ``output_tokens`` (int, required) — output tokens generated.
-    * ``total_tokens`` (int, required) — ``input_tokens + output_tokens``
-      (fresh + output). Computed here because the SDK does not populate
-      ``totalTokens`` in ``assistant.usage`` events (``Data.total_tokens`` is
-      ``float | None = None`` in the schema; it is ``None`` in usage payloads).
-      The kernel ``Usage.total_tokens`` is non-optional so we compute it.
+    * ``total_tokens`` (int, required) — ``input_tokens + output_tokens``.
+      Computed here because the SDK does not populate ``totalTokens`` in
+      ``assistant.usage`` events (``Data.total_tokens`` is ``float | None = None``
+      in the schema; it is ``None`` in usage payloads). The kernel
+      ``Usage.total_tokens`` is non-optional so we compute it.
     * ``cache_read_tokens`` (int | None) — tokens served from the upstream LLM's
       prompt cache. ``None`` when the field is absent from the event, which is
       semantically distinct from ``0`` (SDK reported a confirmed zero, meaning no
@@ -200,21 +215,19 @@ def extract_usage_data(sdk_event: Any) -> dict[str, int | None] | None:
                 cache_write: int | None = (
                     int(raw_cache_write) if raw_cache_write is not None else None
                 )
-                # Contract: streaming-contract:usage:MUST:3 — kernel Usage.input_tokens
-                # must be the fresh (uncacheable) portion only.
-                # SDK input_tokens = fresh + cache_read + cache_write (billing total).
-                # Subtract both buckets so the computation is exact in all cases.
-                # The streaming UI adds cache_read + cache_write back for display, so
-                # display total = fresh + cache_read + cache_write = sdk_input_tokens.
-                fresh_tok = max(0, in_tok - (cache_read or 0) - (cache_write or 0))
+                # Contract: streaming-contract:usage:MUST:3 — kernel
+                # Usage.input_tokens equals the SDK billing total minus
+                # cache_write_tokens; cache_read remains inside input_tokens
+                # so the gross-input shape matches the kernel contract.
+                # cache_write is treated as 0 when absent or None.
+                adjusted_input = max(0, in_tok - (cache_write or 0))
                 return {
-                    "input_tokens": fresh_tok,
+                    "input_tokens": adjusted_input,
                     "output_tokens": out_tok,
                     # SDK assistant.usage does not send total_tokens — compute it.
                     # Kernel Usage.total_tokens: int is required (not Optional).
-                    # total_tokens = fresh + output (consistent with input_tokens convention).
-                    # Contract: streaming-contract:usage:MUST:1, MUST:3
-                    "total_tokens": fresh_tok + out_tok,
+                    # Contract: streaming-contract:usage:MUST:3
+                    "total_tokens": adjusted_input + out_tok,
                     # Contract: streaming-contract:usage:MUST:2
                     "cache_read_tokens": cache_read,
                     "cache_write_tokens": cache_write,
@@ -236,16 +249,16 @@ def extract_usage_data(sdk_event: Any) -> dict[str, int | None] | None:
             raw_cache_write = getattr(data, "cache_write_tokens", None)
             cache_read = int(raw_cache_read) if raw_cache_read is not None else None
             cache_write = int(raw_cache_write) if raw_cache_write is not None else None
-            # Contract: streaming-contract:usage:MUST:3 — kernel Usage.input_tokens
-            # must be the fresh (uncacheable) portion only.
-            # SDK input_tokens = fresh + cache_read + cache_write (billing total).
-            fresh_tok = max(0, in_tok - (cache_read or 0) - (cache_write or 0))
+            # Contract: streaming-contract:usage:MUST:3 — kernel
+            # Usage.input_tokens equals the SDK billing total minus
+            # cache_write_tokens; cache_read remains inside input_tokens
+            # so the gross-input shape matches the kernel contract.
+            adjusted_input = max(0, in_tok - (cache_write or 0))
             return {
-                "input_tokens": fresh_tok,
+                "input_tokens": adjusted_input,
                 "output_tokens": out_tok,
-                # total_tokens = fresh + output (consistent with input_tokens convention).
-                # Contract: streaming-contract:usage:MUST:1, MUST:3
-                "total_tokens": fresh_tok + out_tok,
+                # Contract: streaming-contract:usage:MUST:3
+                "total_tokens": adjusted_input + out_tok,
                 # Contract: streaming-contract:usage:MUST:2
                 "cache_read_tokens": cache_read,
                 "cache_write_tokens": cache_write,

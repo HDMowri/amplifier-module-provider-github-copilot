@@ -807,9 +807,12 @@ def translate_event(sdk_event: dict[str, Any], config: EventConfig) -> DomainEve
 
     domain_type, block_type = config.bridge_mappings[event_type]
 
-    # For USAGE_UPDATE events, use extract_usage_data to apply the
-    # fresh-only input_tokens computation (MUST:3) rather than raw extraction.
-    # Raw _extract_event_data would pass the SDK's billing total (fresh + cache_read).
+    # For USAGE_UPDATE events, route through extract_usage_data so that
+    # Usage.input_tokens follows the kernel-mandated gross shape
+    # (fresh + cache_read), produced by subtracting cache_write_tokens from
+    # the SDK's billing-total inputTokens. Raw _extract_event_data would
+    # pass the SDK's billing total unchanged (i.e. still containing
+    # cache_write), violating streaming-contract:usage:MUST:3.
     # Contract: streaming-contract:usage:MUST:3
     if domain_type == DomainEventType.USAGE_UPDATE:
         from .sdk_adapter.event_helpers import extract_usage_data
