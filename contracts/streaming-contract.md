@@ -1,13 +1,14 @@
 # Contract: Streaming
 
 ## Version
-- **Current:** 1.4 (EventRouter-Extracted)
+- **Current:** 1.5 (Cache-Token Semantics Aligned with Cross-Provider Convention)
 - **Module Reference:** 
   - `amplifier_module_provider_github_copilot/streaming.py` (accumulator, event translation)
   - `amplifier_module_provider_github_copilot/event_router.py` (SDK event routing)
 - **Kernel Types:** `amplifier_core.message_models` (Pydantic, NOT content_models dataclass)
 - **Status:** Specification
 - **History:**
+  - **1.5** — `usage:MUST:3` rewritten: `Usage.input_tokens` excludes only `cache_write_tokens`; cache_read remains inside input_tokens, aligning with `amplifier-core` `PROVIDER_CONTRACT.md` gross-input shape (PR #69, 2026-05-06)
   - **1.4** — Extracted EventRouter from provider.py (separation of concerns)
   - **1.3** — Added completion guard, usage capture, session lifecycle anchors (bug fix documentation)
   - **1.2** — Fixed anchor prefix from `streaming:` to `streaming-contract:`, added missing anchors
@@ -169,15 +170,9 @@ The SDK sends `assistant.usage` events AFTER `session.idle` (turn completion). T
 
 **Rationale:** The kernel `Usage` model includes optional `cache_read_tokens` and `cache_write_tokens` fields (Pydantic `int | None`, default `None`). The SDK populates `cacheReadTokens` in the `assistant.usage` event when the upstream LLM provider's (e.g., Anthropic/Claude) prompt cache is hit. If these fields are dropped, Amplifier session analytics cannot distinguish cached from uncached token cost — masking significant cost differences (cache-read tokens bill at 0.10× the base rate). The SDK schema (`session_events.Data`) defines both `cache_read_tokens` and `cache_write_tokens` as `float | None`; `cache_write_tokens` is not currently populated by the SDK even when a cache write occurs, but the provider MUST extract it when present so the implementation is correct as soon as the SDK populates it. `None` is semantically distinct from `0`: `None` means the field was not reported; `0` means the SDK reported a confirmed zero.
 
-**streaming-contract:usage:MUST:3**: The provider MUST set `Usage.input_tokens` to the **fresh (uncacheable) token count only** — not the SDK's billing total. When cache fields are present, `input_tokens = sdk_input_tokens - cache_read_tokens - cache_write_tokens`. `total_tokens` MUST equal `input_tokens + output_tokens`.
+**streaming-contract:usage:MUST:3**: When the SDK `assistant.usage` event is processed, the provider MUST set `Usage.input_tokens = max(0, sdk_inputTokens - (cache_write_tokens or 0))`. Cache token fields are forwarded per `streaming-contract:usage:MUST:2`. `Usage.total_tokens` MUST equal `Usage.input_tokens + Usage.output_tokens`.
 
-**Rationale:** The Copilot SDK's `assistant.usage` event reports `input_tokens` as the billing total (`fresh + cache_read + cache_write`). The kernel `Usage.input_tokens` convention — established by the Anthropic provider and consumed by the Amplifier streaming UI — defines `input_tokens` as the fresh/uncacheable portion only. The streaming UI computes the display total as `input_tokens + cache_read + cache_write`, so if the provider passes the SDK's billing total, the UI double-counts the cache buckets. Subtracting both `cache_read` and `cache_write` means the streaming UI display exactly recovers the SDK billing total: `fresh + cache_read + cache_write = sdk_input_tokens`.
-
-**Evidence:** Streaming UI source (`amplifier-module-hooks-streaming-ui/__init__.py`):
-```python
-# When caching is active, input_tokens is just the uncacheable portion
-total_input = input_tokens + cache_read + cache_create
-```
+**Rationale:** The Copilot SDK reports four token fields (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`) without documenting their inclusion semantics; the SDK schema and docs (`copilot-sdk/v0.3.0/docs/features/streaming-events.md`) describe each field neutrally. The kernel `Usage` schema (`amplifier-core` `docs/contracts/PROVIDER_CONTRACT.md` `llm:response`, normative since `1548042c` / PR #69, 2026-05-06) requires `input_tokens` to be the gross total (fresh + `cache_read` combined) with `cache_write_tokens` as a separate additive bucket billed on top. This provider subtracts only `cacheWriteTokens` from `inputTokens` to produce that kernel-mandated shape; subtracting `cacheReadTokens` would double-remove it. The resulting value is compatible with the streaming-ui hook's display total, which adds `cache_write_tokens` on top of gross per kernel contract (`microsoft/amplifier-module-hooks-streaming-ui@79dde49`, post-PR #10 `dda82a9`).
 
 **Implementation:**
 ```python
@@ -422,7 +417,7 @@ class StreamingChatResponse(ChatResponse):
 | `streaming-contract:completion:MUST:2` | Events after ERROR are ignored (except usage) |
 | `streaming-contract:usage:MUST:1` | Usage events captured even after completion |
 | `streaming-contract:usage:MUST:2` | Cache token fields forwarded to kernel Usage when present |
-| `streaming-contract:usage:MUST:3` | `Usage.input_tokens` = fresh only (`sdk_input - cache_read - cache_write`); `total_tokens = input + output` |
+| `streaming-contract:usage:MUST:3` | `Usage.input_tokens = max(0, sdk_inputTokens - (cache_write_tokens or 0))`; cache fields forwarded per `usage:MUST:2`; `total_tokens = input_tokens + output_tokens` |
 | `streaming-contract:SessionLifecycle:MUST:1` | Provider validates idle_events config at load time |
 | `streaming-contract:ProgressiveStreaming:SHOULD:1` | Emit llm:content_block events |
 | `streaming-contract:ProgressiveStreaming:SHOULD:2` | Async fire-and-forget emission |

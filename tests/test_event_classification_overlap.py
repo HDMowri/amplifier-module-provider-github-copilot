@@ -13,7 +13,7 @@ import pytest
 from amplifier_module_provider_github_copilot._compat import ConfigurationError
 from amplifier_module_provider_github_copilot.streaming import (
     DomainEventType,
-    _validate_no_classification_overlap,
+    _validate_no_classification_overlap,  # pyright: ignore[reportPrivateUsage]
     load_event_config,
 )
 
@@ -545,27 +545,53 @@ class TestUsageEventHelpers:
             f"got {result.get('cache_write_tokens')}"
         )
 
-    def test_extract_usage_data_cache_tokens_none_when_absent(self) -> None:
+    @pytest.mark.parametrize(
+        "shape,reported_zero,expected",
+        [
+            pytest.param("dict", False, None, id="dict_absent_yields_none"),
+            pytest.param("dict", True, 0, id="dict_explicit_zero_preserved"),
+            pytest.param("object", False, None, id="object_absent_yields_none"),
+            pytest.param("object", True, 0, id="object_explicit_zero_preserved"),
+        ],
+    )
+    def test_extract_usage_data_cache_tokens_none_vs_zero(
+        self, shape: str, reported_zero: bool, expected: int | None
+    ) -> None:
         """Contract: streaming-contract:usage:MUST:2
 
-        When cache_read_tokens and cache_write_tokens are absent from the SDK event,
-        extract_usage_data MUST return None for each — not zero. None is semantically
-        distinct from 0: None means the SDK did not report the field; 0 means the SDK
-        reported a confirmed zero. Conflating them hides whether caching occurred.
+        ``None`` (SDK did not report the field) MUST remain distinct from ``0``
+        (SDK reported a confirmed zero). Conflating them hides whether caching
+        occurred. Both event shapes must preserve the distinction.
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             extract_usage_data,
         )
 
-        event = {"data": {"input_tokens": 100, "output_tokens": 50}}
+        if shape == "dict":
+            data: dict[str, object] = {"input_tokens": 100, "output_tokens": 50}
+            if reported_zero:
+                data["cache_read_tokens"] = 0
+                data["cache_write_tokens"] = 0
+            event: object = {"data": data}
+        else:
+
+            class _Data:
+                input_tokens = 100
+                output_tokens = 50
+
+            if reported_zero:
+                _Data.cache_read_tokens = 0.0  # type: ignore[attr-defined]
+                _Data.cache_write_tokens = 0.0  # type: ignore[attr-defined]
+
+            class _Event:
+                data = _Data()
+
+            event = _Event()
+
         result = extract_usage_data(event)
         assert result is not None  # narrowed for pyright
-        assert result["cache_read_tokens"] is None, (
-            "cache_read_tokens absent from event must be None, not 0"
-        )
-        assert result["cache_write_tokens"] is None, (
-            "cache_write_tokens absent from event must be None, not 0"
-        )
+        assert result["cache_read_tokens"] == expected
+        assert result["cache_write_tokens"] == expected
 
     def test_stream_accumulator_build_response_passes_cache_tokens_to_usage(self) -> None:
         """Contract: streaming-contract:usage:MUST:2
@@ -603,67 +629,181 @@ class TestUsageEventHelpers:
             f"got {response.usage.cache_write_tokens}"
         )
 
-    def test_extract_usage_data_input_tokens_is_fresh_only_when_cache_hit_dict(self) -> None:
+    @pytest.mark.parametrize(
+        "sdk_input,output,cache_read,cache_write,expected_input",
+        [
+            pytest.param(70436, 23, 63128, None, 70436, id="read_only_cache_write_absent"),
+            # prod_cw_zero: cache_read > 0, cache_write explicitly 0. Distinct
+            # from read_only_cache_write_absent (cw=None / field absent): here
+            # cw=0 is explicit, exercising the None-vs-0 preservation path on
+            # the cache_write field while leaving the subtraction a no-op.
+            pytest.param(84119, 119, 60034, 0, 84119, id="prod_cw_zero"),
+            # write_only_no_read: cache_read=0, cache_write > 0. Synthetic
+            # shape that isolates the cache_write subtraction branch from
+            # cache_read by zeroing the latter. Drives a non-trivial
+            # subtraction even when the read bucket is inactive, so dropping
+            # ``- (cache_write or 0)`` makes this row fail in isolation.
+            pytest.param(64295, 473, 0, 64285, 10, id="write_only_no_read"),
+            # mixed_real_shape: numbers scaled from a captured SDK v0.3.0
+            # ``session.shutdown`` event (2026-05-17, model claude-sonnet-4.6)
+            # whose ``modelMetrics`` block carries inputTokens=34554,
+            # cacheReadTokens=26075, cacheWriteTokens=8475 with a sibling
+            # ``tokenDetails.input.tokenCount=4``; the identity
+            # ``4 + 26075 + 8475 == 34554`` confirms ``inputTokens`` is the
+            # gross billing total (fresh + cache_read + cache_write). This row
+            # exercises the BOTH-cache-buckets-non-zero arithmetic path that
+            # the production capture proves the SDK is capable of emitting.
+            pytest.param(67719, 6, 60034, 7682, 60037, id="mixed_real_shape"),
+        ],
+    )
+    def test_extract_usage_data_subtracts_only_cache_write_when_cache_hit_dict(
+        self,
+        sdk_input: int,
+        output: int,
+        cache_read: int,
+        cache_write: int | None,
+        expected_input: int,
+    ) -> None:
         """Contract: streaming-contract:usage:MUST:3
 
-        When the SDK sends input_tokens=70436 (billing total = fresh + cached) and
-        cache_read_tokens=63128, extract_usage_data MUST set input_tokens to the fresh
-        portion only (70436 - 63128 = 7308). The streaming UI convention is that
-        input_tokens = uncacheable/fresh portion; it adds cache_read separately to
-        compute the display total. Passing the billing total causes the UI to double-
-        count cache_read and display 133K instead of 70K.
+        Behavioural contract: ``Usage.input_tokens ==
+        max(0, sdk_inputTokens - (cache_write or 0))``; cache_read remains
+        inside ``input_tokens`` (it is NOT subtracted), and the
+        ``input_tokens + (cache_write or 0)`` round-trip MUST recover the SDK's
+        original ``inputTokens`` value. The mixed and write-only rows kill
+        mutations that the read-only fixture cannot reach: dropping the cache_write
+        subtraction (write_only row), or accidentally subtracting cache_read
+        (mixed row), both turn at least one assertion red.
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             extract_usage_data,
         )
 
-        event = {
-            "data": {
-                "input_tokens": 70436,
-                "output_tokens": 23,
-                "cache_read_tokens": 63128,
-            }
+        data: dict[str, object] = {
+            "input_tokens": sdk_input,
+            "output_tokens": output,
+            "cache_read_tokens": cache_read,
         }
-        result = extract_usage_data(event)
+        if cache_write is not None:
+            data["cache_write_tokens"] = cache_write
+        result = extract_usage_data({"data": data})
         assert result is not None  # narrowed for pyright
-        assert result["input_tokens"] == 7308, (
-            f"input_tokens must be fresh-only (70436 - 63128 = 7308), "
-            f"got {result.get('input_tokens')} — "
-            "provider is double-counting cache_read in input_tokens"
-        )
-        assert result["total_tokens"] == 7308 + 23, (
-            f"total_tokens must be fresh + output = 7331, got {result.get('total_tokens')}"
-        )
-        assert result["cache_read_tokens"] == 63128
+        assert result["input_tokens"] == expected_input
+        assert result["output_tokens"] == output
+        assert result["total_tokens"] == expected_input + output
+        assert result["cache_read_tokens"] == cache_read
+        assert result["cache_write_tokens"] == cache_write
+        # Round-trip: streaming-UI recovers SDK billing total via
+        # input_tokens + (cache_write or 0).
+        in_t = result["input_tokens"] or 0
+        cw_t = result["cache_write_tokens"] or 0
+        assert in_t + cw_t == sdk_input
 
-    def test_extract_usage_data_input_tokens_is_fresh_only_when_cache_hit_object(self) -> None:
+    @pytest.mark.parametrize(
+        "sdk_input,output,cache_read,cache_write,expected_input",
+        [
+            pytest.param(70436, 23, 63128.0, None, 70436, id="read_only_cache_write_absent"),
+            # prod_cw_zero: see provenance note on the dict-path row above.
+            pytest.param(84119, 119, 60034.0, 0.0, 84119, id="prod_cw_zero"),
+            # write_only_no_read: see provenance note on the dict-path row above.
+            pytest.param(64295, 473, 0.0, 64285.0, 10, id="write_only_no_read"),
+            # mixed_real_shape: see provenance note on the dict-path row above.
+            pytest.param(67719, 6, 60034.0, 7682.0, 60037, id="mixed_real_shape"),
+        ],
+    )
+    def test_extract_usage_data_subtracts_only_cache_write_when_cache_hit_object(
+        self,
+        sdk_input: int,
+        output: int,
+        cache_read: float,
+        cache_write: float | None,
+        expected_input: int,
+    ) -> None:
         """Contract: streaming-contract:usage:MUST:3
 
-        Object-path (real SDK): same fresh-only requirement on the object event path.
-        SDK Data object has input_tokens=70436 (billing total) and
-        cache_read_tokens=63128.0 (float). Provider must compute 70436 - 63128 = 7308.
+        Object-path (attribute-bearing stand-in mimicking the SDK
+        ``session_events.Data`` shape; ``float | None`` cache fields). Same
+        behavioural contract as the dict path: cache_read stays inside
+        ``input_tokens`` and only cache_write is subtracted, clamped at zero.
+        The object-path branch in ``extract_usage_data`` is physically distinct
+        from the dict-path branch (separate ``getattr`` reads vs. ``dict.get``),
+        so both must be exercised independently.
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
             extract_usage_data,
         )
 
         class MockData:
-            input_tokens = 70436
-            output_tokens = 23
-            cache_read_tokens = 63128.0  # SDK sends float
-            cache_write_tokens = None
+            pass
+
+        MockData.input_tokens = sdk_input  # type: ignore[attr-defined]
+        MockData.output_tokens = output  # type: ignore[attr-defined]
+        MockData.cache_read_tokens = cache_read  # type: ignore[attr-defined]
+        MockData.cache_write_tokens = cache_write  # type: ignore[attr-defined]
 
         class MockEvent:
             data = MockData()
 
         result = extract_usage_data(MockEvent())
         assert result is not None  # narrowed for pyright
-        assert result["input_tokens"] == 7308, (
-            f"input_tokens must be fresh-only (70436 - 63128 = 7308), "
-            f"got {result.get('input_tokens')}"
+        assert result["input_tokens"] == expected_input
+        assert result["output_tokens"] == output
+        assert result["total_tokens"] == expected_input + output
+        assert result["cache_read_tokens"] == int(cache_read)
+        expected_cw = int(cache_write) if cache_write is not None else None
+        assert result["cache_write_tokens"] == expected_cw
+        in_t = result["input_tokens"] or 0
+        cw_t = result["cache_write_tokens"] or 0
+        assert in_t + cw_t == sdk_input
+
+    @pytest.mark.parametrize(
+        "shape",
+        ["dict", "object"],
+    )
+    def test_extract_usage_data_clamps_input_to_zero_when_cache_write_exceeds_input(
+        self, shape: str
+    ) -> None:
+        """Contract: streaming-contract:usage:MUST:3
+
+        The MUST clause requires the result to be ``clamped to zero`` when the
+        cache_write subtraction would underflow. Without ``max(0, ...)`` the
+        kernel ``Usage.input_tokens`` would be negative, breaking downstream
+        billing math. This is the only test that exercises the clamp branch.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
         )
-        assert result["total_tokens"] == 7308 + 23, (
-            f"total_tokens must be fresh + output = 7331, got {result.get('total_tokens')}"
+
+        if shape == "dict":
+            event: object = {
+                "data": {
+                    "input_tokens": 100,
+                    "output_tokens": 5,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 250,
+                }
+            }
+        else:
+
+            class _Data:
+                input_tokens = 100
+                output_tokens = 5
+                cache_read_tokens = 0.0
+                cache_write_tokens = 250.0
+
+            class _Event:
+                data = _Data()
+
+            event = _Event()
+
+        result = extract_usage_data(event)
+        assert result is not None  # narrowed for pyright
+        assert result["input_tokens"] == 0, (
+            "Cache-write underflow MUST clamp input_tokens to 0, not "
+            f"{result.get('input_tokens')}"
+        )
+        assert result["total_tokens"] == 5, (
+            "total_tokens = clamped_input + output = 0 + 5"
         )
 
     def test_extract_usage_data_input_tokens_unchanged_when_no_cache(self) -> None:
@@ -683,6 +823,209 @@ class TestUsageEventHelpers:
             "When no cache, input_tokens should equal sdk value (no subtraction)"
         )
         assert result["total_tokens"] == 150
+
+
+class TestStreamingUIPercentageInvariantWithRealCapturedShapes:
+    """Anti-1633% regression: the streaming-ui hook's cache-percentage display
+    must never exceed 100%.
+
+    Contract: streaming-contract:usage:MUST:3 (kernel-mandated gross input shape)
+    Anchor (upstream): amplifier-core PROVIDER_CONTRACT.md L176-187 -- input_tokens
+    "MUST" be "gross total (fresh + cache_read combined)".
+    Anchor (downstream): amplifier-module-hooks-streaming-ui __init__.py L74-96 --
+    `_compute_total_input` returns `input_tokens + cache_create`, then displays
+    `cache_pct = int((cache_read / total_input) * 100)`.
+
+    Why this class exists separately from the per-row parametrize tables above:
+    those rows cover the post-transform field values. This class enforces the
+    end-to-end ANTI-1633% invariant -- that for every shape the SDK can plausibly
+    emit, the post-`extract_usage_data` Usage dict, when fed into the streaming-ui
+    formula, produces a percentage in [0, 100].
+
+    Shapes are CAPTURED FROM LIVE amplifier runs against the github-copilot SDK
+    (5 distinct production shapes; identities verified by replaying the kernel
+    formula). Each shape pairs the SDK-side raw fields with the kernel-mandated
+    post-transform result.
+    """
+
+    # Five live-captured shapes from `amplifier run` probe matrix:
+    #   (1) claude-sonnet text-only mid-session cache hit
+    #   (2) claude-sonnet tool-using turn (tool_calls > 0)
+    #   (3) claude-haiku WRITE-ONLY first turn (huge cache_write, no cache_read)
+    #   (4) gpt-5.5 no-caching turn (cache fields zero across the board)
+    #   (5) defensive: SDK emitted Usage with all fields None
+    # Each row: (label, sdk_input, sdk_cache_read, sdk_cache_write, sdk_output,
+    # expected_input_after_transform, expected_total_after_transform).
+    CAPTURED_SHAPES = [
+        ("claude_sonnet_cache_hit", 63390, 60068, 3319, 6, 60071, 60077),
+        ("claude_sonnet_tool_use", 63393, 60068, 3322, 90, 60071, 60161),
+        ("claude_haiku_write_only", 63552, 0, 63542, 96, 10, 106),
+        ("gpt55_no_cache", 53611, 0, 0, 58, 53611, 53669),
+        ("all_none_defensive", None, None, None, None, None, None),
+    ]
+
+    @pytest.mark.parametrize(
+        "label,sdk_input,sdk_cr,sdk_cw,sdk_out,exp_in,exp_total",
+        CAPTURED_SHAPES,
+        ids=[r[0] for r in CAPTURED_SHAPES],
+    )
+    def test_real_captured_shape_satisfies_streaming_ui_invariant(
+        self,
+        label: str,
+        sdk_input: int | None,
+        sdk_cr: int | None,
+        sdk_cw: int | None,
+        sdk_out: int | None,
+        exp_in: int | None,
+        exp_total: int | None,
+    ) -> None:
+        """For every captured production shape, the streaming-ui denominator
+        (`input_tokens + cache_write_tokens`) must be >= cache_read_tokens.
+
+        This is the direct anti-regression assertion for the 1633%-display bug.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        event = {
+            "data": {
+                "input_tokens": sdk_input,
+                "output_tokens": sdk_out,
+                "cache_read_tokens": sdk_cr,
+                "cache_write_tokens": sdk_cw,
+            }
+        }
+        result = extract_usage_data(event)
+
+        if sdk_input is None and sdk_out is None:
+            # Defensive: SDK emitted a Usage event with no numbers.
+            # The helper should either return None or a Usage with input=None.
+            # The streaming-ui hook coerces None to 0 (`_compute_total_input` L90-96)
+            # and the percentage display path is gated on `total_input > 0`, so
+            # no division-by-zero crash and no percentage shown -- acceptable.
+            if result is not None:
+                # If a Usage was synthesised, its input_tokens must be 0 or None,
+                # and cache_read must be 0 or None.
+                assert (result.get("input_tokens") or 0) == 0
+                assert (result.get("cache_read_tokens") or 0) == 0
+            return
+
+        assert result is not None, f"shape={label}: extract_usage_data returned None"
+        assert result["input_tokens"] == exp_in, (
+            f"shape={label}: post-transform input_tokens "
+            f"expected {exp_in}, got {result['input_tokens']}"
+        )
+        assert result["total_tokens"] == exp_total, (
+            f"shape={label}: total_tokens expected {exp_total}, got {result['total_tokens']}"
+        )
+
+        # The streaming-ui invariant: denominator must be >= numerator.
+        # Denominator = _compute_total_input = input_tokens + cache_write_tokens
+        # Numerator   = cache_read_tokens
+        input_tokens = result["input_tokens"] or 0
+        cache_read = result.get("cache_read_tokens") or 0
+        cache_write = result.get("cache_write_tokens") or 0
+        denom = input_tokens + cache_write
+
+        assert denom >= cache_read, (
+            f"shape={label}: streaming-ui denominator ({denom}) < cache_read ({cache_read}); "
+            "this would produce a >100% display (the 1633% regression)"
+        )
+        if denom > 0:
+            pct = (cache_read / denom) * 100
+            assert 0 <= pct <= 100, (
+                f"shape={label}: cache percentage {pct:.2f}% outside [0, 100]"
+            )
+
+    def test_round_trip_identity_holds_for_all_captured_shapes(self) -> None:
+        """For every non-degenerate captured shape, the SDK-side gross input
+        must equal (post-transform input_tokens) + (cache_write_tokens).
+
+        This is the identity that proves `extract_usage_data` only subtracts
+        cache_write -- not cache_read.
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        for label, sdk_in, sdk_cr, sdk_cw, sdk_out, _exp_in, _exp_total in (
+            self.CAPTURED_SHAPES
+        ):
+            if sdk_in is None:
+                continue  # degenerate row covered by parametrized test above
+            event = {
+                "data": {
+                    "input_tokens": sdk_in,
+                    "output_tokens": sdk_out,
+                    "cache_read_tokens": sdk_cr,
+                    "cache_write_tokens": sdk_cw,
+                }
+            }
+            result = extract_usage_data(event)
+            assert result is not None
+            it = result["input_tokens"] or 0
+            cw = result.get("cache_write_tokens") or 0
+            assert it + cw == sdk_in, (
+                f"shape={label}: round-trip identity violated: "
+                f"input_tokens({it}) + cache_write({cw}) != sdk_input({sdk_in})"
+            )
+
+    def test_gpt55_no_cache_shape_displays_no_percentage(self) -> None:
+        """gpt-5.5 produced (cr=0, cw=0). Streaming-ui must not display a cache %
+        on this shape -- there is nothing to display. The numerator is 0, so any
+        well-formed display formula yields 0% (or suppresses entirely).
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        event = {
+            "data": {
+                "input_tokens": 53611,
+                "output_tokens": 58,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+            }
+        }
+        result = extract_usage_data(event)
+        assert result is not None
+        assert result["input_tokens"] == 53611, "no-cache shape: input must pass through unchanged"
+        assert result["cache_read_tokens"] == 0
+        assert result["cache_write_tokens"] == 0
+        # streaming-ui formula: pct = cr / (it + cw) = 0 / 53611 = 0.0
+        denom = (result["input_tokens"] or 0) + (result.get("cache_write_tokens") or 0)
+        assert denom == 53611
+        pct = (result.get("cache_read_tokens") or 0) / denom * 100
+        assert pct == 0.0
+
+    def test_haiku_write_only_first_turn_shape(self) -> None:
+        """claude-haiku first-turn write-only: SDK input=63552 with cw=63542, cr=0.
+        This is the WRITE phase before any cache reads occur. Post-transform
+        input_tokens must collapse to the fresh portion (10).
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.event_helpers import (
+            extract_usage_data,
+        )
+
+        event = {
+            "data": {
+                "input_tokens": 63552,
+                "output_tokens": 96,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 63542,
+            }
+        }
+        result = extract_usage_data(event)
+        assert result is not None
+        assert result["input_tokens"] == 10, (
+            "haiku write-only first turn: post-transform input = sdk_input - cache_write"
+        )
+        # Streaming-ui denom = 10 + 63542 = 63552; numerator (cache_read) = 0.
+        denom = (result["input_tokens"] or 0) + (result.get("cache_write_tokens") or 0)
+        assert denom == 63552
+        pct = (result.get("cache_read_tokens") or 0) / denom * 100
+        assert pct == 0.0
 
 
 class TestValidateNoClassificationOverlapValidator:
@@ -821,7 +1164,7 @@ class TestEmptyIdleEventsRaises:
         import yaml
 
         # Minimal YAML with empty idle_events — triggers the fail-fast guard
-        bad_yaml = {
+        bad_yaml: dict[str, object] = {
             "event_classifications": {
                 "bridge": [],
                 "consume": [],
