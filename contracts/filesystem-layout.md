@@ -1,9 +1,14 @@
 # Contract: Filesystem Layout
 
-**Version:** 1.0
+**Version:** 1.2
 **Status:** Normative
 **Implementation:** `amplifier_module_provider_github_copilot/config/_paths.py`,
 `amplifier_module_provider_github_copilot/sdk_adapter/client.py::CopilotClientWrapper._ensure_client_initialized`
+**Update:** 2026-05-30 — SDK pin bumped b9 → b10. All v1.1 Wiring/Isolation/Identity/Paths/Lifecycle/Acceptance/Portability MUST clauses verified byte-compatible against b10: `CopilotClient.__init__` signature unchanged (b10 `client.py:1073-1089`), `base_directory` semantics unchanged (b10 `client.py:1081,1108-1111`), `env=` REPLACE semantics unchanged (b10 `client.py:3182-3185`), `COPILOT_HOME` set from `base_directory` unchanged (b10 `client.py:3199`). No production source change required by filesystem layout; the b10 bump adds 8 new MinimalMode kwargs that ride on the unchanged base_directory/env wiring.
+**History:**
+  - **1.2** — SDK v1.0.0b10: no filesystem-layout clauses changed. All v1.1 wiring (base_directory + env REPLACE + COPILOT_HOME) survived byte-compatible against b10; v1.1 line citations shifted in b10 (env REPLACE 2937-2940 → 3182-3185; COPILOT_HOME 2952-2953 → 3199; base_directory 1059 → 1081 and 1083-1086 → 1108-1111; CopilotClient.__init__ 1051-1067 → 1073-1089) but every semantic invariant survived byte-compatible against b10. This row affirms the b10 evaluation; the 8 new b10 MinimalMode pins live in `contracts/sdk-boundary.md` v1.9, not here.
+  - **1.1** — SDK v1.0.0b9: Wiring:MUST:1/2/3/5 rewritten — `SubprocessConfig(copilot_home=...)` replaced by `CopilotClient(base_directory=..., github_token=..., log_level=..., env=...)` direct kwargs. Line citations bumped to b9: client.py:1059 (base_directory kwarg), 1083-1086 (base_directory docstring), 2937-2940 (env REPLACE), 2942-2943 (COPILOT_SDK_AUTH_TOKEN), 2952-2953 (COPILOT_HOME from base_directory). Isolation:MUST:1 Test Anchors restructured to use `monkeypatch.setattr(client_mod, "CopilotClient", FakeCopilotClient)` (scoped module patch, not class-level).
+  - **1.0** — Initial contract (Wiring/Isolation/Identity/Paths/Lifecycle/Acceptance/Portability MUST clauses).
 
 ## Overview
 
@@ -99,33 +104,34 @@ contract does not bind them.
 ## Wiring
 
 - **MUST:1.** The token branch of `_ensure_client_initialized` MUST
-  build `SubprocessConfig` with
-  `copilot_home=str(load_provider_paths().provider_home)`.
-- **MUST:2.** The no-token branch MUST set the same `copilot_home`
-  value as the token branch.
+  call `CopilotClient(base_directory=str(load_provider_paths().provider_home),
+  github_token=..., log_level=..., env=...)`. b10 wires `base_directory` into
+  the spawned runtime as `COPILOT_HOME` (`copilot/client.py:3199`); the
+  `base_directory` kwarg is declared at `copilot/client.py:1081` and documented
+  at `copilot/client.py:1108-1111`.
+- **MUST:2.** The no-token branch MUST pass the same `base_directory`
+  value as the token branch and MUST NOT pass `github_token`.
 - **MUST:3.** `load_provider_paths()` MUST be uncached. A change to
   any of `AMPLIFIER_PROVIDER_GITHUB_COPILOT_HOME`, `XDG_DATA_HOME`,
   `XDG_CACHE_HOME`, `LOCALAPPDATA`, `HOME`, or `USERPROFILE` between
   two `_ensure_client_initialized` calls MUST be reflected in the
-  next `SubprocessConfig`.
+  next `CopilotClient(base_directory=...)` construction.
 - **MUST:4.** Every provider-owned regenerable artifact MUST resolve
   its directory through `load_provider_paths().cache_home`. No module
   in the package MAY synthesize a cache-base path; precedence and
   platform branching live exclusively in `config/_paths.py`.
-- **MUST:5.** `SubprocessConfig.env` MUST be set to an explicit dict
+- **MUST:5.** `CopilotClient(env=...)` MUST be set to an explicit dict
   derived from `os.environ` with `COPILOT_HOME` and `COPILOT_CLI_PATH`
-  removed. Relying on the SDK's `env=None` inherit-from-parent default
-  is forbidden: the SDK resolves CLI-path selection through
-  `effective_env = config.env if config.env is not None else os.environ`
-  (`copilot/client.py:941`, as of SDK 1.0.0b4) and reads
-  `COPILOT_CLI_PATH` from that `effective_env`
-  (`copilot/client.py:944`, as of SDK 1.0.0b4); when we pass an explicit
-  dict with the key removed, the SDK falls through to its bundled-binary
-  path (`copilot/client.py:949-952`, as of SDK 1.0.0b4). Passing the
-  explicit dict therefore
-  (a) takes a deterministic env snapshot at spawn time, and (b) ensures
-  a host-set `COPILOT_CLI_PATH` cannot redirect the CLI binary the SDK
-  spawns.
+  removed. Relying on the SDK's `env=None` default is forbidden: b10 treats
+  `env=` as full REPLACE -- `copilot/client.py:3182-3185` reads
+  `env = dict(opts.env)` when the caller supplies a dict, otherwise
+  `dict(os.environ)`. The SDK then sets `env["COPILOT_HOME"] =
+  opts.base_directory` (`copilot/client.py:3199`) and
+  `env["COPILOT_SDK_AUTH_TOKEN"] = opts.github_token`
+  (`copilot/client.py:3189`) AFTER consuming the caller's env, so the
+  scrub MUST remove `COPILOT_HOME` before the call to guarantee no ambient
+  leak. If a future SDK release switches to env-merge semantics, the provider
+  MUST be updated to re-scrub after merge or fail closed.
 
 ## Lifecycle
 
@@ -235,14 +241,14 @@ assertion messages name the violated rule fragment.
 | `Paths:MUST:3` | `test_provider_home_and_cache_home_are_disjoint` |
 | `Paths:MUST:4` | covered by `override-tilde-expands` and `xdg-tilde-expands` rows of the Paths:MUST:1 matrix and the `xdg-tilde-expands` row of the Paths:MUST:2 matrix |
 | `Paths:MUST:5` | `test_provider_paths_is_immutable` |
-| `Isolation:MUST:1` | `test_host_env_sentinel_never_appears_in_resolved_paths` (parametrized over `AMPLIFIER_HOME`, `AMPLIFIER_APP_CLI_HOME`, `AMPLIFIER_DISTRO_HOME`, `AMPLIFIER_RUNTIME_HOME`, `AMPLIFIER_FOUNDATION_HOME`, `COPILOT_HOME`, `COPILOT_CLI_PATH`); each row sets the sentinel in the parent env and asserts (i) `provider_home != sentinel`, (ii) the `SubprocessConfig` the provider builds carries `copilot_home == str(provider_home)` (for the `COPILOT_HOME` row) or the unmodified bundled `cli_path` (for the `COPILOT_CLI_PATH` row), AND (iii) an AST scan over every `.py` in the package finds no `ast.Subscript` indexing `os.environ` and no `os.getenv` / `os.environ.get` call with key `"COPILOT_HOME"` or `"COPILOT_CLI_PATH"`. Sub-clause (ii) is additionally anchored by `test_filesystem_subprocess_env.py::test_token_branch_passes_provider_home_to_sdk`; sub-clause (iii) is additionally anchored by `test_filesystem_isolation.py::test_no_forbidden_env_reads_in_package` |
+| `Isolation:MUST:1` | `test_host_env_sentinel_never_appears_in_resolved_paths` (parametrized over `AMPLIFIER_HOME`, `AMPLIFIER_APP_CLI_HOME`, `AMPLIFIER_DISTRO_HOME`, `AMPLIFIER_RUNTIME_HOME`, `AMPLIFIER_FOUNDATION_HOME`, `COPILOT_HOME`, `COPILOT_CLI_PATH`); each row sets the sentinel in the parent env and asserts (i) `provider_home != sentinel`, (ii) the captured `CopilotClient(**kwargs)` call has `kwargs["base_directory"] == str(provider_home)`, `"COPILOT_HOME" not in kwargs["env"]`, and `"COPILOT_CLI_PATH" not in kwargs["env"]`, AND (iii) an AST scan over every `.py` in the package finds no `ast.Subscript` indexing `os.environ` and no `os.getenv` / `os.environ.get` call with key `"COPILOT_HOME"` or `"COPILOT_CLI_PATH"`. Sub-clause (ii) is additionally anchored by `test_filesystem_subprocess_env.py::test_token_branch_passes_provider_home_to_sdk`; sub-clause (iii) is additionally anchored by `test_filesystem_isolation.py::test_no_forbidden_env_reads_in_package`. The fixture interception point is `CopilotClient.__init__` kwargs capture via `monkeypatch.setattr(client_mod, "CopilotClient", FakeCopilotClient)`, scoped to the provider module under test. |
 | `Isolation:MUST:2` | `test_dot_amplifier_and_dot_copilot_never_probed_or_resolved` |
 | `Isolation:MUST:3` | `test_constructor_injection_overrides_env_resolution` (constructs `ProviderPaths(provider_home=<abs tmp>, cache_home=<abs tmp>)` and asserts wiring uses those values verbatim) |
-| `Wiring:MUST:1` | `test_token_branch_passes_provider_home_to_sdk` |
-| `Wiring:MUST:2` | `test_token_and_no_token_branches_agree_on_copilot_home` (asserts equality with the value captured in the `Wiring:MUST:1` fixture, not mere presence) |
-| `Wiring:MUST:3` | `test_load_provider_paths_is_uncached_across_env_change` |
+| `Wiring:MUST:1` | `test_token_branch_passes_provider_home_to_sdk` (asserts the captured `CopilotClient(**kwargs)` call has `kwargs["base_directory"] == str(provider_home)`) |
+| `Wiring:MUST:2` | `test_token_and_no_token_branches_agree_on_copilot_home` (asserts equality with the value captured in the `Wiring:MUST:1` fixture, and that the no-token branch does not pass `github_token`) |
+| `Wiring:MUST:3` | `test_load_provider_paths_is_uncached_across_env_change` (asserts the next captured `CopilotClient(**kwargs)` call reflects the changed `kwargs["base_directory"]`) |
 | `Wiring:MUST:4` | `test_models_cache_file_resolves_under_cache_home` (monkeypatches `config._paths.load_provider_paths` to return a `ProviderPaths` whose `cache_home` is an absolute tmp sentinel, then asserts the path the model-cache module would write to has that sentinel as a prefix — i.e. the assertion fails if the module recomputes precedence). Plus `test_no_cache_base_synthesis_outside_paths_module`: an AST scan over every `.py` in the package other than `config/_paths.py` MUST find no `ast.Subscript` indexing `os.environ` (or `os.getenv` call) with any of `{"LOCALAPPDATA", "XDG_CACHE_HOME", "XDG_DATA_HOME"}`, and no `ast.Compare` whose left is `Attribute(value=Name("sys"), attr="platform")` |
-| `Wiring:MUST:5` | `test_subprocess_env_omits_copilot_home_and_cli_path` (sets `COPILOT_HOME=/sentinel/h` and `COPILOT_CLI_PATH=/sentinel/cli` in the parent env, asserts `SubprocessConfig.env` passed to the SDK is a non-None dict, and that `"COPILOT_HOME" not in cfg.env` and `"COPILOT_CLI_PATH" not in cfg.env`) |
+| `Wiring:MUST:5` | `test_subprocess_env_omits_copilot_home_and_cli_path` (sets `COPILOT_HOME=/sentinel/h` and `COPILOT_CLI_PATH=/sentinel/cli` in the parent env, asserts the captured `CopilotClient(**kwargs)` call passes an `env` dict, and that `"COPILOT_HOME" not in kwargs["env"]` and `"COPILOT_CLI_PATH" not in kwargs["env"]`) |
 | `Lifecycle:MUST:1` | `test_provider_home_created_with_0700_on_posix`, `test_provider_home_creation_refuses_symlink_on_posix`, `test_creation_does_not_mutate_global_umask` |
 | `Lifecycle:MUST:2` | `test_provider_home_creation_omits_mode_arg_on_windows` |
 | `Lifecycle:MUST:3` | `test_collision_chain_carries_FileExistsError_or_NotADirectoryError` |
@@ -254,4 +260,4 @@ assertion messages name the violated rule fragment.
 ## Related
 
 `provider-protocol.md` (identity), `sdk-boundary.md`
-(`SubprocessConfig`), `observability.md` (SDK log location).
+(`CopilotClient` wiring), `observability.md` (SDK log location).
