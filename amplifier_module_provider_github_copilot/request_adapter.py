@@ -31,9 +31,7 @@ logger = logging.getLogger(__name__)
 # Fallback allowlist used when the resolved CopilotModelInfo is unavailable
 # (cache miss / unknown model). Without this, any short string would be
 # forwarded to the SDK. Mirrors the SDK ReasoningEffort Literal as of v0.3.0.
-_REASONING_EFFORT_FALLBACK_ALLOWLIST: frozenset[str] = frozenset(
-    {"low", "medium", "high", "xhigh"}
-)
+_REASONING_EFFORT_FALLBACK_ALLOWLIST: frozenset[str] = frozenset({"low", "medium", "high", "xhigh"})
 
 # Echo-redaction guard for ConfigurationError messages. Rejected values are
 # rendered verbatim only if they match this token shape; anything else is
@@ -279,8 +277,7 @@ def convert_chat_request(
         reasoning_effort = raw_reasoning_effort
     else:
         raise ConfigurationError(
-            f"reasoning_effort must be str or None; got "
-            f"{type(raw_reasoning_effort).__name__}.",
+            f"reasoning_effort must be str or None; got {type(raw_reasoning_effort).__name__}.",
             provider=PROVIDER_ID,
         )
 

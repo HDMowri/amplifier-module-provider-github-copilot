@@ -10,7 +10,7 @@ SoC: This module contains DATA (dataclasses + defaults) only.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 __all__ = [
     "MinimalModeConfig",
@@ -26,11 +26,22 @@ __all__ = [
 class MinimalModeConfig:
     """Minimal mode session configuration policy.
 
-    Contract: sdk-boundary:MinimalMode:MUST:1-6
+    Contract: sdk-boundary:MinimalMode:MUST:1-14
 
     Disables SDK features that Amplifier handles, ensuring Amplifier is the sole
     orchestrator. Evidence: 57% wall-clock improvement (12.5s → 5.4s) confirmed
-    in sessions 7db2b5f7 and 2fa58db6.
+    in sessions 7db2b5f7 and 2fa58db6 (MUST:1-6 baseline, b9).
+
+    MUST:7-14 are pinned as part of the b10 bump. MUST:7-13 are new
+    create_session kwargs introduced at b10 (verified against b10
+    `client.py:1582-1605`); MUST:14 (`enable_session_telemetry`) was
+    already a b9 kwarg (b9 `client.py:1550`) and is consolidated under
+    MinimalMode now so all SDK-internal session capabilities live in one
+    place. Each of the 8 kwargs has an empty-mode default helper at b10
+    `_mode.py:185-258` that fires ONLY when `mode == "empty"`. Our
+    adapter ships `mode="copilot-cli"`, so explicit pins ARE the wire
+    shape — leaving any of these `None` lets the bundled CLI defaults
+    apply.
     """
 
     # MUST:1 — Disable SDK compaction; Amplifier manages context.
@@ -50,6 +61,38 @@ class MinimalModeConfig:
 
     # MUST:6 — Explicit empty; Amplifier handles slash commands.
     commands: list[str] = field(default_factory=list)
+
+    # MUST:7 — Disable SDK cross-session persistent store; sessions are
+    # ephemeral per `complete()` call (deny-destroy contract).
+    enable_session_store: bool = False
+
+    # MUST:8 — Disable SDK skills loader; stronger than MUST:4 (which only
+    # empties the directory list).
+    enable_skills: bool = False
+
+    # MUST:9 — Disable SDK file-hook discovery (AGENTS.md walkers etc.);
+    # Amplifier registers a single deny-all hook explicitly.
+    enable_file_hooks: bool = False
+
+    # MUST:10 — Disable SDK host-git delegation; Amplifier never delegates
+    # git to the SDK and the deny-all hook would block it anyway.
+    enable_host_git_operations: bool = False
+
+    # MUST:11 — Disable SDK on-demand instruction scans; complements MUST:2.
+    enable_on_demand_instruction_discovery: bool = False
+
+    # MUST:12 — Disable SDK embedding-based workspace retrieval; Amplifier
+    # owns context construction.
+    skip_embedding_retrieval: bool = True
+
+    # MUST:13 — Keep embedding cache in RAM; no on-disk residue across the
+    # ephemeral session boundary.
+    embedding_cache_storage: Literal["persistent", "in-memory"] = "in-memory"
+
+    # MUST:14 — Disable SDK-internal session telemetry; Amplifier owns
+    # observability. b10 `client.py:1651-1656` documents this as ON-by-default
+    # for GitHub-authenticated sessions, which is our COPILOT_AGENT_TOKEN path.
+    enable_session_telemetry: bool = False
 
 
 @dataclass(frozen=True)

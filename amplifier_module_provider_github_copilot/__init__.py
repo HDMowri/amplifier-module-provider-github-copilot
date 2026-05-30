@@ -1,9 +1,11 @@
 """GitHub Copilot Provider for Amplifier.
 
-Three-Medium Architecture:
-- Python for mechanism (~300 lines)
-- YAML for policy (~200 lines)
-- Markdown for contracts (~400 lines)
+Two-Medium Architecture:
+- Python for mechanism AND policy (config/_*.py)
+- Markdown for contracts (contracts/*.md)
+
+YAML is reserved exclusively for SDK-correlated tabular data
+(config/data/errors.yaml, events.yaml) — never for policy.
 
 Contract: contracts/provider-protocol.md
 """
@@ -26,6 +28,9 @@ import threading
 from importlib.metadata import PackageNotFoundError as _PkgNotFoundError
 from importlib.metadata import version as _pkg_version
 
+from packaging.version import InvalidVersion as _InvalidVersion
+from packaging.version import Version as _Version
+
 from ._identity import PROVIDER_ID
 
 # Single source of truth for pytest detection — defined in _platform.py.
@@ -39,24 +44,58 @@ _SKIP_SDK_CHECK = _os.environ.get("SKIP_SDK_CHECK") and is_pytest_running()
 
 
 def _check_sdk_version(version_str: str) -> None:
-    """Raise ImportError if SDK version does not satisfy >=1.0.0b4.
+    """Raise ImportError if SDK version does not satisfy >=1.0.0b10.
 
-    Extracted for testability — module-level code that runs under SKIP_SDK_CHECK
-    cannot be reached by unit tests; this function can be imported and tested
-    directly.
+    The b10 floor matches what the adapter actually calls:
+    ``CopilotClient(base_directory=..., mode="copilot-cli", ...)`` plus the
+    8 MinimalMode kwargs pinned at b10 (``enable_session_store``,
+    ``enable_skills``, ``enable_file_hooks``, ``enable_host_git_operations``,
+    ``enable_on_demand_instruction_discovery``, ``skip_embedding_retrieval``,
+    ``embedding_cache_storage``, ``enable_session_telemetry``). The first
+    seven are new ``create_session`` kwargs in b10 (verified against SDK
+    b10 ``client.py:1582-1605``); passing any of them to b9 raises
+    ``TypeError: unexpected keyword argument`` at the first
+    ``create_session(...)`` call. The eighth, ``enable_session_telemetry``,
+    is a pre-existing b9 kwarg consolidated under MinimalMode now.
+    Surfacing the floor at import time gives the user the actionable
+    reinstall message instead of a deferred ``TypeError``.
+
+    The floor is the symbol-availability minimum (``>=1.0.0b10``); the
+    exact pyproject pin (``==1.0.0b10``) is enforced separately by
+    ``tests/_sdk_version_gate.py``. Earlier 1.x betas lack required
+    MinimalMode kwargs and are rejected here at import time.
+
+    Extracted for testability — module-level code that runs under
+    SKIP_SDK_CHECK cannot be reached by unit tests; this function can be
+    imported and tested directly.
 
     Contract: sdk-boundary:Membrane:MUST:5
     """
-    try:
-        ver_parts = tuple(int(x) for x in version_str.split(".")[:2] if x.isdigit())
-    except (ValueError, TypeError):  # pragma: no cover — malformed version string
-        ver_parts = (0, 0)
-    if ver_parts < (1, 0):
+    if _parse_sdk_version(version_str) < _SDK_FLOOR:
         raise ImportError(
-            f"github-copilot-sdk=={version_str} is installed but ==1.0.0b4 is required. "
-            "Upgrade with: pip install 'github-copilot-sdk==1.0.0b4' "
-            "or reinstall the provider: amplifier provider install --force github-copilot"
+            f"github-copilot-sdk=={version_str} is below the symbol-availability "
+            "floor (>=1.0.0b10 required; MinimalMode MUST:7-14 kwargs added at b10). "
+            "Pinned target: ==1.0.0b10 (pyproject.toml). "
+            "Reinstall with: pip install 'github-copilot-sdk==1.0.0b10' "
+            f"or: amplifier provider install --force {PROVIDER_ID}"
         )
+
+
+_SDK_FLOOR: _Version = _Version("1.0.0b10")
+_SDK_UNPARSEABLE: _Version = _Version("0.0.0a0")
+
+
+def _parse_sdk_version(version_str: str) -> _Version:
+    """Parse a github-copilot-sdk PyPI release identifier (PEP 440).
+
+    Uses ``packaging.version.Version`` for full PEP 440 coverage (pre/post/
+    local/dev releases all ordered correctly). Unparseable input maps to a
+    sentinel below every real release so the guard fails closed.
+    """
+    try:
+        return _Version(version_str)
+    except _InvalidVersion:
+        return _SDK_UNPARSEABLE
 
 
 if not _SKIP_SDK_CHECK:  # pragma: no cover
@@ -66,15 +105,13 @@ if not _SKIP_SDK_CHECK:  # pragma: no cover
         # SDK required; tests only run with SDK installed
         raise ImportError(
             "Required dependency 'github-copilot-sdk' is not installed. "
-            "Install with:  pip install 'github-copilot-sdk==1.0.0b4'"
+            "Install with:  pip install 'github-copilot-sdk==1.0.0b10'"
         ) from _e
     # Contract: sdk-boundary:Membrane:MUST:5 — fail at import time on wrong version.
-    # Presence-only check passes silently for SDK 0.1.x which lacks SubprocessConfig,
-    # causing a cryptic ConfigurationError deep in the init flow instead.
     _check_sdk_version(_sdk_version)
 
 # E402: These imports are intentionally after SDK check - we verify SDK
-# installation before importing modules that depend on it (Three-Medium).
+# installation before importing modules that depend on it (Two-Medium Architecture).
 import logging  # noqa: E402
 from collections.abc import Awaitable, Callable  # noqa: E402
 from typing import Any, NoReturn  # noqa: E402
@@ -89,7 +126,7 @@ from .sdk_adapter import AUTH_ENV_VARS, CopilotClientWrapper  # noqa: E402
 
 # Contract: provider-protocol:public_api:MUST:1 — must match pyproject.toml [project].version
 # Verified by tests/test_behaviors.py::TestPackageVersionConsistency
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 # Amplifier module metadata
 __amplifier_module_type__ = "provider"
@@ -190,6 +227,39 @@ async def _acquire_shared_client() -> CopilotClientWrapper:
 
     assert result_client is not None  # guaranteed by the logic above
     return result_client
+
+
+async def _cancel_prewarm_task() -> None:
+    """Cancel the in-flight prewarm task, if any, and await its termination.
+
+    Idempotent; safe to call from both the success-path cleanup() closure and
+    the mount() failure handler. Contract: sdk-protection:Subprocess:MUST:5.
+    """
+    global _prewarm_task
+    task = _prewarm_task
+    if task is None or task.done():
+        _prewarm_task = None
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        # _prewarm() at __init__.py:374-386 catches and logs Exception itself
+        # (with redaction). By the time the task resolves here only
+        # CancelledError or a re-raised non-Exception should surface; still,
+        # log at DEBUG (not WARN) so a future regression that removes the
+        # inner handler leaves a traceable signal without competing with
+        # the original mount-failure WARN being handled by the caller.
+        # Contract: sdk-protection:Subprocess:MUST:5.
+        # Pinned by: tests/test_client_lifecycle.py::TestPrewarmSubprocess::
+        #   test_cancel_prewarm_task_suppresses_inner_exception_branch.
+        logging.getLogger(__name__).debug(
+            "[CLEANUP] cancel-site suppressed non-CancelledError from prewarm task",
+            exc_info=True,
+        )
+    _prewarm_task = None
 
 
 async def _release_shared_client() -> None:
@@ -350,15 +420,7 @@ async def mount(
 
         async def cleanup() -> None:
             # Contract: sdk-protection:Subprocess:MUST:5 — Cancel prewarm task
-            global _prewarm_task
-            if _prewarm_task is not None and not _prewarm_task.done():  # pragma: no cover
-                # Prewarm cancelled during shutdown — unlikely in tests
-                _prewarm_task.cancel()
-                try:
-                    await _prewarm_task
-                except asyncio.CancelledError:
-                    pass  # Expected
-                _prewarm_task = None
+            await _cancel_prewarm_task()
 
             # Contract: streaming-contract:ProgressiveStreaming:SHOULD:3 — cancel tasks
             await provider.cancel_emit_tasks()
@@ -370,6 +432,10 @@ async def mount(
 
         return cleanup
     except Exception as e:
+        # Cancel prewarm before releasing the client it depends on.
+        # Contract: sdk-protection:Subprocess:MUST:5 — leaked task would
+        # otherwise survive against a closing client.
+        await _cancel_prewarm_task()
         # Release our reference if mount fails
         await _release_shared_client()
 

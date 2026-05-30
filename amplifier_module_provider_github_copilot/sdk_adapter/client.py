@@ -24,6 +24,11 @@ from .._permissions import ensure_executable
 from .._platform import get_platform_info, locate_cli_binary
 from ..config_loader import load_sdk_protection_config
 
+# Membrane re-export so tests can monkeypatch a FakeCopilotClient at this
+# module's namespace per filesystem-layout:Wiring:MUST:1 test anchor.
+# Contract: sdk-boundary:Membrane:MUST:1 — _imports.py remains the only SDK import site.
+from ._imports import CopilotClient
+
 # Domain modules are NOT imported at module level — importing CopilotClientWrapper
 # must not pull in error_translation or security_redaction as side effects.
 # translate_sdk_error and safe_log_message are resolved lazily on first use
@@ -43,6 +48,33 @@ AUTH_ENV_VARS: tuple[str, ...] = (
     "GITHUB_TOKEN",
 )
 
+# Env vars that MUST be scrubbed before constructing CopilotClient. The SDK
+# injects COPILOT_HOME from base_directory and resolves COPILOT_CLI_PATH from
+# the binary it locates itself; leaving these in env= lets ambient values
+# override the explicit wiring. COPILOT_SDK_AUTH_TOKEN is the SDK b10 token
+# transport (set via --auth-token-env): the SDK only writes it into the
+# subprocess env when an explicit github_token is passed, so an ambient
+# parent-shell value would otherwise survive into the spawned process on the
+# no-token branch and authenticate against a credential the provider never
+# resolved. Contract: filesystem-layout:Wiring:MUST:5, Auth:MUST:6.
+SDK_ENV_SCRUB_KEYS: tuple[str, ...] = (
+    "COPILOT_HOME",
+    "COPILOT_CLI_PATH",
+    "COPILOT_SDK_AUTH_TOKEN",
+)
+
+
+def scrub_sdk_env(env: dict[str, str]) -> dict[str, str]:
+    """Return a copy of *env* with SDK-overriding keys removed.
+
+    Used by both production wiring (_ensure_client_initialized) and the live
+    test fixture, so parity between the two is mechanical, not aspirational.
+    """
+    scrubbed = dict(env)
+    for key in SDK_ENV_SCRUB_KEYS:
+        scrubbed.pop(key, None)
+    return scrubbed
+
 
 def _minimal_mode_session_config() -> dict[str, Any]:
     """Build per-session minimal-mode config without leaking shared mutable state."""
@@ -54,6 +86,18 @@ def _minimal_mode_session_config() -> dict[str, Any]:
         "skill_directories": list(minimal_mode.skill_directories),
         "custom_agents": list(minimal_mode.custom_agents),
         "commands": list(minimal_mode.commands),
+        # MUST:7-14 — b10 defense-in-depth pins. See _sdk_protection.py for
+        # mode="copilot-cli" rationale (empty-mode default helpers do not fire).
+        "enable_session_store": minimal_mode.enable_session_store,
+        "enable_skills": minimal_mode.enable_skills,
+        "enable_file_hooks": minimal_mode.enable_file_hooks,
+        "enable_host_git_operations": minimal_mode.enable_host_git_operations,
+        "enable_on_demand_instruction_discovery": (
+            minimal_mode.enable_on_demand_instruction_discovery
+        ),
+        "skip_embedding_retrieval": minimal_mode.skip_embedding_retrieval,
+        "embedding_cache_storage": minimal_mode.embedding_cache_storage,
+        "enable_session_telemetry": minimal_mode.enable_session_telemetry,
     }
 
 
@@ -332,7 +376,17 @@ class CopilotClientWrapper:
 
             try:
                 from ..config._paths import ensure_paths_exist, load_provider_paths
-                from ._imports import CopilotClient, SubprocessConfig
+                from . import _imports
+
+                # _imports.CopilotClient is the documented patch seam for
+                # unit tests (sdk-boundary tests patch it directly); the
+                # module-level alias is the production binding. In prod both
+                # are non-None and use the module-level alias. SKIP_SDK_CHECK
+                # leaves both None and tests inject through _imports.
+                # Removing the fallback breaks the patch contract.
+                sdk_client_cls = (
+                    CopilotClient if CopilotClient is not None else _imports.CopilotClient
+                )
 
                 token = _resolve_token()
                 log_level = _resolve_sdk_log_level()
@@ -342,51 +396,43 @@ class CopilotClientWrapper:
                 # Lifecycle:MUST:1/2 — materialize lazily before SDK launch.
                 ensure_paths_exist(resolved_paths)
                 copilot_home_str = str(resolved_paths.provider_home)
-                # Wiring:MUST:5 — explicit env, COPILOT_HOME + COPILOT_CLI_PATH scrubbed.
-                scrubbed_env = dict(os.environ)
-                scrubbed_env.pop("COPILOT_HOME", None)
-                scrubbed_env.pop("COPILOT_CLI_PATH", None)
+                # Wiring:MUST:5 — env= is REPLACE in b10 (client.py:3182-3185);
+                # the SDK injects COPILOT_HOME from base_directory afterwards
+                # (client.py:3199), so scrub the ambient values now.
+                scrubbed_env = scrub_sdk_env(dict(os.environ))
 
-                # SDK v0.3.0: SubprocessConfig replaces the v0.2.x options dict
-                if SubprocessConfig is not None and token:
-                    # Wiring:MUST:1 — token branch passes copilot_home.
-                    config = SubprocessConfig(
-                        github_token=token,
-                        log_level=log_level,
-                        copilot_home=copilot_home_str,
-                        env=scrubbed_env,
-                    )
-                    self._owned_client = CopilotClient(config)
-                elif SubprocessConfig is not None and not token:
-                    # Wiring:MUST:2 — no-token branch agrees on copilot_home.
-                    config = SubprocessConfig(
-                        log_level=log_level,
-                        copilot_home=copilot_home_str,
-                        env=scrubbed_env,
-                    )
-                    self._owned_client = CopilotClient(config)
-                elif token and SubprocessConfig is None:
-                    # Security P1-6: Fail closed when explicit token cannot be applied.
-                    # An explicitly-provided token MUST NEVER be silently ignored.
-                    # This prevents unintended privilege escalation from falling back
-                    # to ambient/default authentication with potentially broader permissions.
-                    # OWASP A07: Identification and Authentication Failures
-                    raise ConfigurationError(
-                        "Explicit GitHub token provided via environment variable, but SDK's "
-                        "SubprocessConfig is unavailable (SDK version mismatch). Cannot apply "
-                        "token - failing closed to prevent unintended default authentication.",
-                        provider=PROVIDER_ID,
-                    )
-                else:
-                    # No token, no SubprocessConfig: only reachable under
-                    # SKIP_SDK_CHECK=1 (pytest). Production code with the
-                    # pinned SDK >= 1.0.0b4 always has SubprocessConfig.
-                    if CopilotClient is None:
-                        raise RuntimeError(
-                            "SubprocessConfig and CopilotClient unavailable. "
-                            "Production code requires github-copilot-sdk >= 1.0.0b4."
+                if sdk_client_cls is None:
+                    # Test-mode invariant: SKIP_SDK_CHECK=1 substitutes a None
+                    # CopilotClient, so an explicit token has no SDK to apply it
+                    # to. Surface the misconfiguration instead of silently
+                    # dropping the token onto an ambient auth path.
+                    if token:
+                        raise ConfigurationError(
+                            "Explicit GitHub token provided but CopilotClient is "
+                            "unavailable (test-mode SDK substitution). Cannot "
+                            "apply token.",
+                            provider=PROVIDER_ID,
                         )
-                    self._owned_client = CopilotClient()
+                    raise RuntimeError(
+                        "CopilotClient unavailable. "
+                        "Production code requires github-copilot-sdk >= 1.0.0b10."
+                    )
+
+                # Wiring:MUST:1/2 — both branches pass base_directory; only the
+                # token branch passes github_token. mode is passed explicitly per
+                # filesystem-layout:Wiring:MUST:1 rather than relying on the SDK
+                # default, so a future SDK default change cannot silently flip us
+                # off copilot-cli.
+                # Contract: sdk-boundary:SDKSurface:MUST:8 (keyword-only).
+                client_kwargs: dict[str, Any] = {
+                    "base_directory": copilot_home_str,
+                    "env": scrubbed_env,
+                    "log_level": log_level,
+                    "mode": "copilot-cli",
+                }
+                if token:
+                    client_kwargs["github_token"] = token
+                self._owned_client = sdk_client_cls(**client_kwargs)
 
                 logger.debug("[CLIENT] CopilotClient created for %s", caller)
 
@@ -412,14 +458,11 @@ class CopilotClientWrapper:
                             "enabled. Move the SDK install to a native Linux filesystem "
                             "(e.g. ~/.local/...) or remount with 'metadata' enabled."
                         )
-                    elif platform_info.is_windows:
-                        # ensure_executable() short-circuits to True on Windows,
-                        # so this branch should be unreachable. Defensive only.
-                        hint = (
-                            "Unexpected on Windows — please file a bug at "
-                            "https://github.com/microsoft/amplifier-module-provider-github-copilot/issues."
-                        )
                     else:
+                        # Windows is filtered upstream: ensure_executable() returns
+                        # True without attempting chmod on Windows (see
+                        # sdk_adapter.platform), so this branch only fires on
+                        # POSIX systems where the chmod silently no-op'd.
                         hint = (
                             "This can occur on network shares (NFS, SMB, CIFS), "
                             "container volume mounts, or some FUSE drivers that "
@@ -455,13 +498,10 @@ class CopilotClientWrapper:
                     provider=PROVIDER_ID,
                 ) from e
             except (ProviderUnavailableError, ConfigurationError):
-                # Already a typed amplifier-core error with intentional semantics:
-                #   - ProviderUnavailableError: ensure_executable failure (above).
-                #   - ConfigurationError: explicit token + missing SubprocessConfig
-                #     (Security P1-6, fail-closed). Translating it would lose the
-                #     "misconfigured, not unavailable" distinction the orchestrator
-                #     needs for routing/retry decisions.
-                # Don't re-translate — preserve typed semantics and message.
+                # Preserve typed amplifier-core semantics so the orchestrator can
+                # distinguish "misconfigured" from "unavailable" for routing/retry.
+                # ProviderUnavailableError: ensure_executable failure (above).
+                # ConfigurationError: test-mode CopilotClient substitution + token.
                 raise
             except Exception as e:
                 error_config = self._get_error_config()
