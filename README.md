@@ -127,27 +127,32 @@ amplifier provider models github-copilot
 
 ## Supported Models
 
-Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current set as of SDK 1.0.0b4; run `amplifier provider models github-copilot` for the live list.
+Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.0b10; run `amplifier provider models github-copilot` for the live list.
+
+**Routing:**
+
+| Model ID | Context | Max Output | Capabilities |
+| --- | --- | --- | --- |
+| `auto` | 128k | 16k | streaming, tools |
 
 **Anthropic:**
 
 | Model ID | Context | Max Output | Capabilities |
 | --- | --- | --- | --- |
+| `claude-opus-4.8` | 200k | 32k | streaming, tools, vision, thinking |
 | `claude-opus-4.7` | 200k | 32k | streaming, tools, vision, thinking |
+| `claude-opus-4.6` | 200k | 32k | streaming, tools, vision, thinking |
+| `claude-opus-4.5` | 200k | 32k | streaming, tools, vision |
 | `claude-sonnet-4.6` | 200k | 32k | streaming, tools, vision, thinking |
 | `claude-sonnet-4.5` | 200k | 32k | streaming, tools, vision |
 | `claude-haiku-4.5` | 200k | 64k | streaming, tools, vision |
-| `claude-opus-4.6` | 200k | 32k | streaming, tools, vision, thinking |
-| `claude-opus-4.6-1m` | 1M | 64k | streaming, tools, vision, thinking |
-| `claude-opus-4.5` | 200k | 32k | streaming, tools, vision |
-| `claude-sonnet-4` | 216k | 88k | streaming, tools, vision |
 
 **OpenAI:**
 
 | Model ID | Context | Max Output | Capabilities |
 | --- | --- | --- | --- |
-| `gpt-5.5` | 400k | 128k | streaming, tools, vision, thinking |
-| `gpt-5.4` | 400k | 128k | streaming, tools, vision, thinking |
+| `gpt-5.5` | 1.05M | 128k | streaming, tools, vision, thinking |
+| `gpt-5.4` | 1.05M | 128k | streaming, tools, vision, thinking |
 | `gpt-5.3-codex` | 400k | 128k | streaming, tools, vision, thinking |
 | `gpt-5.2-codex` | 400k | 128k | streaming, tools, vision, thinking |
 | `gpt-5.2` | 400k | 128k | streaming, tools, vision, thinking |
@@ -504,7 +509,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk==1.0.0b4`
+- `github-copilot-sdk==1.0.0b10`
 - `pyyaml>=6.0`
 
 > **Note:** `github-copilot-sdk` is installed automatically when you install or initialize

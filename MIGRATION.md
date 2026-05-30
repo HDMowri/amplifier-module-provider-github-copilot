@@ -1,3 +1,133 @@
+# Migration Guide: v2.2.x → v2.3.0
+
+## Overview
+
+v2.3.0 raises the `github-copilot-sdk` requirement and tightens the
+environment variables the provider forwards to the SDK runtime. The
+provider's public surface (`mount`, `GitHubCopilotProvider`, entry point,
+version, documented configuration env vars
+`AMPLIFIER_PROVIDER_GITHUB_COPILOT_HOME` / `GITHUB_TOKEN`) is unchanged.
+
+User-visible changes:
+
+1. SDK requirement is now `github-copilot-sdk==1.0.0b10`.
+2. `COPILOT_CLI_PATH` is no longer honored.
+3. `COPILOT_HOME` is no longer honored.
+4. Ambient `COPILOT_SDK_AUTH_TOKEN` is no longer forwarded to the SDK runtime.
+
+---
+
+## What Changed
+
+### 1. SDK requirement: `github-copilot-sdk==1.0.0b10`
+
+- **What:** The provider now requires `github-copilot-sdk==1.0.0b10`. On
+  import, the provider checks the installed SDK version and raises a
+  clear `ImportError` if the installed version is older. The bump from
+  b9 to b10 adds 8 new `MinimalMode` session-config pins (MUST:7-14:
+  `enable_session_store`, `enable_skills`, `enable_file_hooks`,
+  `enable_host_git_operations`, `enable_on_demand_instruction_discovery`,
+  `skip_embedding_retrieval`, `embedding_cache_storage`,
+  `enable_session_telemetry`) so the SDK's defense-in-depth defaults are
+  pinned explicitly. Wire-shape change only — no provider API change.
+- **Behavior on upgrade:** Older SDK installs (`1.0.0b4`–`b9`) raise an
+  actionable error at provider import time that names the required
+  version and the install command.
+- **Replacement:** Reinstall through Amplifier
+  (`amplifier provider install --force github-copilot`), or pin manually:
+  `pip install 'github-copilot-sdk==1.0.0b10'`.
+- **Rollback:** Pin provider `==2.2.0` with `github-copilot-sdk==1.0.0b4`.
+  The b10 pin and b4 pin cannot be mixed. (Provider `2.3.0` requires
+  `==1.0.0b10`; pinning `2.3.x` against `b4` would fail at provider
+  import time.)
+
+### 2. `COPILOT_CLI_PATH` is no longer honored
+
+- **What:** The provider no longer forwards `COPILOT_CLI_PATH` to the SDK
+  runtime. The SDK uses its managed Copilot CLI binary for deterministic
+  behavior.
+- **Behavior on upgrade:** Any ambient `COPILOT_CLI_PATH` set by the user
+  or shell is ignored when the provider spawns the SDK runtime.
+- **Replacement:** None. If you depended on a custom CLI binary, pin
+  provider `<=2.2.x` and open an issue describing the use case.
+- **Rollback:** Pin provider `==2.2.0` with `github-copilot-sdk==1.0.0b4`.
+
+### 3. `COPILOT_HOME` is no longer honored
+
+- **What:** The provider no longer forwards `COPILOT_HOME` to the SDK
+  runtime. Session state location is controlled by the provider, not by
+  shell env.
+- **Behavior on upgrade:** Any ambient `COPILOT_HOME` set by the user or
+  shell is ignored when the provider spawns the SDK runtime.
+- **Replacement:** Use `AMPLIFIER_PROVIDER_GITHUB_COPILOT_HOME` to control the
+  provider's state root. It is resolved at provider-init time and applied
+  through the provider's path configuration.
+- **Rollback:** Pin provider `==2.2.0` with `github-copilot-sdk==1.0.0b4`.
+
+### 4. `copilot.SubprocessConfig` is no longer imported from the SDK
+
+- **What:** The provider no longer references the
+  `copilot.SubprocessConfig` symbol. Process options that used to be passed
+  via that wrapper (`copilot_home`, `cli_path`, `env`, `log_level`) are now
+  passed directly as keyword arguments on the `CopilotClient(...)`
+  constructor (`base_directory`, `env`, `log_level`, `github_token`). The
+  SDK removed `SubprocessConfig` from its public API at b7 and it has
+  remained absent through b10 — keeping it in the import surface would
+  fail at import time on any supported SDK version.
+- **Behavior on upgrade:** None for end users — `SubprocessConfig` was
+  never part of the provider's public API. Fork maintainers who
+  re-exported it from provider internals (or patched it in tests) need to
+  switch to patching `CopilotClient` directly (e.g.,
+  `monkeypatch.setattr(client_mod, "CopilotClient", FakeCopilotClient)`).
+- **Replacement:** Construct `CopilotClient(base_directory=..., env=...,
+  log_level=..., mode="copilot-cli", github_token=...)` directly. The
+  `mode="copilot-cli"` argument is required — leaving it unset falls
+  through to the SDK's default mode, which does not match the provider's
+  wiring invariants. See
+  `sdk_adapter/client.py::_ensure_client_initialized` for the canonical
+  pattern.
+- **Rollback:** Not applicable — the symbol was removed upstream.
+
+### 5. Ambient `COPILOT_SDK_AUTH_TOKEN` is no longer forwarded to the SDK
+
+- **What:** The provider scrubs `COPILOT_SDK_AUTH_TOKEN` from the env
+  handed to the spawned SDK subprocess. The SDK uses this variable as the
+  transport for the GitHub token it injects from the `github_token`
+  constructor argument (via `--auth-token-env`); the SDK only writes it
+  into the subprocess env when `github_token` is truthy. Without scrubbing,
+  an ambient parent-shell value would survive into the spawned process on
+  the no-token branch and authenticate against a credential the provider
+  never resolved.
+- **Behavior on upgrade:** When the provider runs without a resolved
+  token (`GITHUB_TOKEN`, `COPILOT_AGENT_TOKEN`, `COPILOT_GITHUB_TOKEN`,
+  and `GH_TOKEN` all unset), the SDK subprocess no longer inherits an
+  ambient `COPILOT_SDK_AUTH_TOKEN`. The provider still fails closed on
+  the no-token path with the usual `ProviderUnavailableError`. When the
+  provider resolves a token through its documented variables, the SDK
+  re-injects `COPILOT_SDK_AUTH_TOKEN` from that resolved value, so
+  authenticated runs are unchanged.
+- **Replacement:** Set one of the documented token variables
+  (`GITHUB_TOKEN`, `COPILOT_AGENT_TOKEN`, `COPILOT_GITHUB_TOKEN`, or
+  `GH_TOKEN`) so the provider resolves the token explicitly. The SDK
+  will then inject `COPILOT_SDK_AUTH_TOKEN` into the subprocess on the
+  provider's behalf.
+- **Rollback:** Pin provider `==2.2.0` with `github-copilot-sdk==1.0.0b4`.
+
+---
+
+## When
+
+Provider version `2.3.0`.
+
+---
+
+## Rollback
+
+If the new SDK or env-var behavior breaks your workflow, pin provider
+`==2.2.0` with `github-copilot-sdk==1.0.0b4`. The two cannot be mixed.
+
+---
+
 # Migration Guide: v1.0.x → v2.0.0
 
 ## Overview
