@@ -1,7 +1,7 @@
 [project]
 name = "amplifier-module-provider-github-copilot"
-version = "2.2.0"
-description = "GitHub Copilot provider for Amplifier - Three-Medium Architecture"
+version = "2.3.0"
+description = "GitHub Copilot provider for Amplifier - Two-Medium Architecture"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -23,11 +23,19 @@ classifiers = [
 
 dependencies = [
     # GitHub Copilot SDK
-    # - v0.2.0: SubprocessConfig, send(prompt, attachments=...)
-    # - v0.3.0: PermissionRequestResult reduced to kind-only; kind values renamed
-    "github-copilot-sdk==1.0.0b4",
+    # - v1.0.0b7: SubprocessConfig removed; CopilotClient takes direct kwargs
+    # - v1.0.0b9: on_list_models + mode kwargs (additive)
+    # - v1.0.0b10: 8 new create_session kwargs (MinimalMode:MUST:7-14)
+    "github-copilot-sdk==1.0.0b10",
     # PyYAML for config loading
     "pyyaml>=6.0",
+    # PEP 440 version parser used by the import-time SDK floor check
+    # (`amplifier_module_provider_github_copilot.__init__._check_sdk_version`).
+    # `packaging` is PyPA-maintained; declared explicitly because the
+    # top-level `packaging` module is not guaranteed present in a minimal
+    # venv (pip vendors it internally as `pip._vendor.packaging`, which
+    # the top-level import cannot resolve).
+    "packaging>=20",
     # Note: amplifier-core is provided by Amplifier runtime when module is loaded
     # Listed here for type hints only; not installed at runtime
 ]
