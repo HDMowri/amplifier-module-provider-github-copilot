@@ -221,14 +221,14 @@ class TestDenyPermissionRequestHappyPath:
     """deny_permission_request() returns PermissionRequestResult when SDK types available."""
 
     def test_returns_permission_request_result_when_sdk_available(self) -> None:
-        """deny_permission_request returns PermissionRequestResult when SDK >= 0.3.0.
+        """deny_permission_request returns PermissionDecisionReject when SDK available.
 
-        Contract: deny-destroy:PermissionRequest:MUST:2
+        Contract: sdk-boundary:SDKSurface:MUST:1b
 
-        In test mode (SKIP_SDK_CHECK=1), _imports.PermissionRequestResult is None.
+        In test mode (SKIP_SDK_CHECK=1), _imports.PermissionDecisionReject is None.
         Patching it to a real class exercises the if-branch in make_permission_denied().
 
-        SDK v0.3.0: PermissionRequestResult(kind=...) — kind-only, no message field.
+        SDK b10: PermissionDecisionReject() — no args; kind is ClassVar = "reject".
         """
         from unittest.mock import MagicMock, patch
 
@@ -236,19 +236,20 @@ class TestDenyPermissionRequestHappyPath:
             deny_permission_request,
         )
 
-        class _MockPermissionRequestResult:
-            """Minimal stand-in for SDK v0.3.0 PermissionRequestResult (kind-only)."""
+        class _MockPermissionDecisionReject:
+            kind: str = "reject"
+            feedback: None = None
 
-            def __init__(self, *, kind: str) -> None:
-                self.kind = kind
+            def __init__(self) -> None:
+                pass
 
         mock_request = MagicMock(spec=object)  # Minimal spec — permission request arg is unused
 
         with patch(
-            "amplifier_module_provider_github_copilot.sdk_adapter._imports.PermissionRequestResult",
-            _MockPermissionRequestResult,
+            "amplifier_module_provider_github_copilot.sdk_adapter._imports.PermissionDecisionReject",
+            _MockPermissionDecisionReject,
         ):
             result = deny_permission_request(mock_request)
 
-        assert isinstance(result, _MockPermissionRequestResult)
+        assert isinstance(result, _MockPermissionDecisionReject)
         assert result.kind == "reject"

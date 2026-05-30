@@ -802,12 +802,9 @@ class TestUsageEventHelpers:
         result = extract_usage_data(event)
         assert result is not None  # narrowed for pyright
         assert result["input_tokens"] == 0, (
-            "Cache-write underflow MUST clamp input_tokens to 0, not "
-            f"{result.get('input_tokens')}"
+            f"Cache-write underflow MUST clamp input_tokens to 0, not {result.get('input_tokens')}"
         )
-        assert result["total_tokens"] == 5, (
-            "total_tokens = clamped_input + output = 0 + 5"
-        )
+        assert result["total_tokens"] == 5, "total_tokens = clamped_input + output = 0 + 5"
 
     def test_extract_usage_data_input_tokens_unchanged_when_no_cache(self) -> None:
         """Contract: streaming-contract:usage:MUST:3
@@ -944,9 +941,7 @@ class TestStreamingUIPercentageInvariantWithRealCapturedShapes:
         )
         if denom > 0:
             pct = (cache_read / denom) * 100
-            assert 0 <= pct <= 100, (
-                f"shape={label}: cache percentage {pct:.2f}% outside [0, 100]"
-            )
+            assert 0 <= pct <= 100, f"shape={label}: cache percentage {pct:.2f}% outside [0, 100]"
 
     def test_round_trip_identity_holds_for_all_captured_shapes(self) -> None:
         """For every non-degenerate captured shape, the SDK-side gross input
@@ -959,9 +954,7 @@ class TestStreamingUIPercentageInvariantWithRealCapturedShapes:
             extract_usage_data,
         )
 
-        for label, sdk_in, sdk_cr, sdk_cw, sdk_out, _exp_in, _exp_total in (
-            self.CAPTURED_SHAPES
-        ):
+        for label, sdk_in, sdk_cr, sdk_cw, sdk_out, _exp_in, _exp_total in self.CAPTURED_SHAPES:
             if sdk_in is None:
                 continue  # degenerate row covered by parametrized test above
             event = {

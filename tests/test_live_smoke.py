@@ -1,4 +1,10 @@
-"""Tier 7: Live Smoke Tests - verify real SDK behavior with actual API calls.
+"""Tier 7: Live Smoke Tests — manual-only.
+
+Manual-only — requires GITHUB_TOKEN, network, and explicit ``pytest -m live``
+invocation. These tests are excluded from the default test run (``-m 'not live'``
+in pyproject.toml) and MUST NOT be added to CI without explicit token provisioning.
+
+Verifies real SDK behavior with actual API calls.
 
 These tests make REAL API calls to GitHub Copilot and require:
 1. A valid GITHUB_TOKEN/COPILOT_GITHUB_TOKEN with copilot scope
@@ -32,6 +38,8 @@ import os
 from typing import Any
 
 import pytest
+
+from tests._sdk_version_gate import require_sdk
 
 
 def _get_token() -> str:
@@ -117,27 +125,37 @@ def _create_session_config() -> dict[str, Any]:
 
 
 @pytest.fixture
-async def live_client():
+async def live_client(tmp_path_factory: pytest.TempPathFactory):
     """Create a real SDK client for live tests.
 
     Yields the started client, stops on cleanup.
     Uses deny_permission_request from our adapter.
 
-    SDK v0.2.0: Uses SubprocessConfig instead of options dict.
+    SDK v1.0.0b10: uses direct CopilotClient keyword arguments.
     Policy: Fails test if SDK not installed or token missing.
-    """
-    if not _get_sdk_available():
-        pytest.fail("copilot SDK not installed. Install it or fix the test environment.")
 
-    import copilot  # type: ignore[import-not-found]
-    from copilot.client import SubprocessConfig  # type: ignore[import-not-found]
+    Parity with production wiring (sdk_adapter/client.py) and the unit
+    fixture in tests/conftest.py:
+      * env built via scrub_sdk_env() so COPILOT_HOME / COPILOT_CLI_PATH
+        cannot leak from the ambient shell into the SDK subprocess.
+      * base_directory is an isolated tmp_path_factory directory per test
+        — no cwd-relative shared state across runs or concurrent pytest
+        invocations.
+    """
+    from amplifier_module_provider_github_copilot.sdk_adapter.client import scrub_sdk_env
+
+    copilot = require_sdk()
 
     # Get token - fails test if not available
     token = _get_token()
 
-    # SDK v0.2.0: SubprocessConfig replaces options dict
-    config = SubprocessConfig(github_token=token)
-    client = copilot.CopilotClient(config)  # type: ignore[arg-type]
+    client = copilot.CopilotClient(
+        base_directory=str(tmp_path_factory.mktemp("live-copilot-home")),
+        github_token=token,
+        log_level="info",
+        env=scrub_sdk_env(dict(os.environ)),
+        mode="copilot-cli",
+    )
     await client.start()
     try:
         yield client
@@ -261,17 +279,24 @@ class TestAuthErrorPatterns:
     async def test_invalid_token_error_shape(self) -> None:
         """Auth errors have predictable class/message patterns.
 
+        # Contract: sdk-boundary:Auth:MUST:2
+
         When SDK receives an invalid token, the error class/message
         should match one of our configured patterns in errors.yaml.
         If not, update errors.yaml.
         """
-        import copilot  # type: ignore[import-not-found]
-        from copilot.client import SubprocessConfig  # type: ignore[import-not-found]
+        from pathlib import Path
+
+        copilot = require_sdk()
 
         # Create client with KNOWN INVALID token
-        # SDK v0.2.0: Use SubprocessConfig
-        config = SubprocessConfig(github_token="ghp_invalid_token_xxxxxxxxxxxxx")
-        client = copilot.CopilotClient(config)  # type: ignore[arg-type]
+        client = copilot.CopilotClient(
+            base_directory=str(Path.cwd() / "logs" / ".pytest-live-copilot-home"),
+            github_token="ghp_invalid_token_xxxxxxxxxxxxx",
+            log_level="info",
+            env=dict(os.environ),
+            mode="copilot-cli",
+        )
         await client.start()
 
         session_config = _create_session_config()

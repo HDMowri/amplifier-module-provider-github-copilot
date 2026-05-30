@@ -15,6 +15,8 @@ Note: These are behavioral tests complementing the structural tests in test_sdk_
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -116,7 +118,15 @@ class TestConcurrentSessionInit:
         mock_session.disconnect = AsyncMock()
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 nonlocal init_count
                 init_count += 1
 
@@ -248,6 +258,34 @@ class TestTokenPriority:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
         assert _resolve_token() is None
+
+    @pytest.mark.asyncio
+    async def test_fail_closed_token_without_client_raises_in_test_mode(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Test mode still fails closed when a token cannot reach CopilotClient.
+
+        Contract: sdk-boundary:Auth:MUST:3
+        """
+        from amplifier_core.llm_errors import ConfigurationError
+
+        from amplifier_module_provider_github_copilot.config._paths import ProviderPaths
+        from amplifier_module_provider_github_copilot.sdk_adapter import client as client_mod
+
+        paths = ProviderPaths(
+            provider_home=tmp_path / "provider-home",
+            cache_home=tmp_path / "cache-home",
+        )
+        monkeypatch.setenv("SKIP_SDK_CHECK", "1")
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+        monkeypatch.setattr(client_mod, "CopilotClient", None)
+
+        wrapper = client_mod.CopilotClientWrapper(provider_paths=paths)
+
+        with pytest.raises(ConfigurationError, match="Explicit GitHub token"):
+            await wrapper._ensure_client_initialized(caller="test")  # pyright: ignore[reportPrivateUsage]
 
 
 class TestSessionConfigInvariants:
@@ -517,12 +555,22 @@ class TestFailedStartCleanup:
 
         Contract: sdk-boundary:Config:MUST:1
         """
+        from amplifier_core.llm_errors import ProviderUnavailableError
+
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
 
         class FailingCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 pass
 
             async def start(self) -> None:
@@ -535,10 +583,9 @@ class TestFailedStartCleanup:
             "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
             FailingCopilotClient,
         ):
-            # session() should raise because start() fails
-            # Note: The error is translated via translate_sdk_error(), so we catch
-            # the base Exception and verify the original message is preserved
-            with pytest.raises(Exception, match="SDK start failed"):
+            # session() raises because start() fails; translate_sdk_error() maps
+            # unrecognised RuntimeError to ProviderUnavailableError (default fallback).
+            with pytest.raises(ProviderUnavailableError, match="SDK start failed"):
                 async with wrapper.session(model="gpt-4"):
                     pass  # Should not reach here
 
@@ -722,7 +769,7 @@ class TestDenyHookBehavior:
 
 
 class TestTokenFallbackSecurity:
-    """Test security behavior when token exists but SubprocessConfig unavailable.
+    """Test security behavior when token exists but CopilotClient constructor unavailable.
 
     P1-6 Security Fix: An explicit token MUST NEVER be silently ignored.
 
@@ -731,7 +778,7 @@ class TestTokenFallbackSecurity:
     When explicit token is provided but SDK can't apply it:
     - ALWAYS fail closed with ConfigurationError
     - No escape hatches - security behavior is unconditional
-    - If tests need to avoid this: clear token env vars, don't mock SubprocessConfig=None
+    - If tests need to avoid this: clear token env vars, don't mask constructor failures
 
     The SKIP_SDK_CHECK env var controls SDK _imports_ only, NOT auth behavior.
     """
@@ -741,60 +788,29 @@ class TestTokenFallbackSecurity:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Raises ConfigurationError when SubprocessConfig unavailable with token.
+        """Raises ConfigurationError when CopilotClient is None and token is set.
 
         Contract: sdk-boundary:Auth:MUST:3
-        Security: Fail closed to prevent unintended default authentication.
         """
-        import pytest
+        from amplifier_core.llm_errors import ConfigurationError
 
+        import amplifier_module_provider_github_copilot.sdk_adapter.client as client_mod
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
 
-        # Clear SKIP_SDK_CHECK to simulate production mode
-        monkeypatch.delenv("SKIP_SDK_CHECK", raising=False)
-
-        # Set a token
+        # Substitute SDK client with None — test-mode invariant path.
+        monkeypatch.setattr(client_mod, "CopilotClient", None)
         monkeypatch.setenv("GITHUB_TOKEN", "test-token-value")
 
-        mock_session = AsyncMock(spec=_MockSDKSession)
-        mock_session.session_id = "fail-closed-test"
-        mock_session.disconnect = AsyncMock()
-
-        class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+        wrapper = CopilotClientWrapper()
+        with pytest.raises(ConfigurationError) as exc_info:
+            async with wrapper.session(model="gpt-4"):
                 pass
 
-            async def start(self) -> None:
-                pass
-
-            async def create_session(self, **kwargs: Any) -> Any:
-                return mock_session
-
-            async def stop(self) -> None:
-                pass
-
-        # Patch to simulate SubprocessConfig = None
-        with (
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                None,
-            ),
-        ):
-            wrapper = CopilotClientWrapper()
-            with pytest.raises(Exception) as exc_info:
-                async with wrapper.session(model="gpt-4"):
-                    pass
-
-            # Should be a ConfigurationError about failing closed
-            err = str(exc_info.value)
-            assert "SubprocessConfig" in err
-            assert "failing closed to prevent unintended default authentication" in err
+        err = str(exc_info.value)
+        assert "CopilotClient" in err
+        assert "Cannot apply token" in err
 
 
 class TestPrewarmSubprocess:
@@ -830,7 +846,15 @@ class TestPrewarmSubprocess:
         mock_session.disconnect = AsyncMock()
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 init_timestamps.append(time.perf_counter())
 
             async def start(self) -> None:
@@ -879,10 +903,6 @@ class TestPrewarmSubprocess:
                     "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                     MockCopilotClient,
                 ),
-                patch(
-                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                    MagicMock(),
-                ),
             ):
                 # Call mount — should trigger pre-warming
                 cleanup = await provider_module.mount(mock_coordinator, {})
@@ -927,7 +947,15 @@ class TestPrewarmSubprocess:
         mock_session.disconnect = AsyncMock()
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 nonlocal init_count
                 init_count += 1
 
@@ -945,10 +973,6 @@ class TestPrewarmSubprocess:
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                 MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                MagicMock(),
             ),
         ):
             wrapper = CopilotClientWrapper()
@@ -971,6 +995,207 @@ class TestPrewarmSubprocess:
                 f"Expected 1 client init (lock should prevent race), got {init_count}"
             )
 
+    @pytest.mark.asyncio
+    async def test_mount_failure_cancels_prewarm_task(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If coordinator.mount() raises, the in-flight prewarm task is
+        cancelled and the ``_prewarm_task`` module global is cleared.
+
+        Pre-fix behavior: the global was left referring to a scheduled task
+        that would run against a closing shared client, and subsequent
+        mount() calls would overwrite the leaked task without cancellation.
+
+        Contract: sdk-protection:Subprocess:MUST:5
+        """
+        import amplifier_module_provider_github_copilot as provider_module
+
+        mock_session = AsyncMock(spec=_MockSDKSession)
+        mock_session.session_id = "prewarm-fail-test"
+        mock_session.disconnect = AsyncMock()
+
+        class MockCopilotClient:
+            def __init__(self, **kwargs: Any) -> None:
+                pass
+
+            async def start(self) -> None:
+                await asyncio.sleep(5.0)
+
+            async def prewarm(self) -> None:
+                pass
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                return mock_session
+
+            async def stop(self) -> None:
+                pass
+
+        provider_module._shared_client = None  # pyright: ignore[reportPrivateUsage]
+        provider_module._shared_client_refcount = 0  # pyright: ignore[reportPrivateUsage]
+        provider_module._prewarm_task = None  # pyright: ignore[reportPrivateUsage]
+
+        mock_coordinator = MagicMock(spec=_MockModuleCoordinator)
+        mock_coordinator.mount = AsyncMock(side_effect=RuntimeError("mount kaboom"))
+
+        from amplifier_module_provider_github_copilot.config._sdk_protection import (
+            SdkConfig,
+            SdkProtectionConfig,
+            SingletonConfig,
+        )
+
+        def mock_load_config() -> SdkProtectionConfig:
+            return SdkProtectionConfig(
+                sdk=SdkConfig(
+                    prewarm_subprocess=True,
+                    log_level="none",
+                    log_level_env_var="COPILOT_SDK_LOG",
+                ),
+                singleton=SingletonConfig(lock_timeout_seconds=30.0),
+            )
+
+        monkeypatch.setattr(provider_module, "load_sdk_protection_config", mock_load_config)
+
+        try:
+            with patch(
+                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
+                MockCopilotClient,
+            ):
+                with pytest.raises(RuntimeError, match="mount kaboom"):
+                    await provider_module.mount(mock_coordinator, {})
+
+                # Behavioral assertion: the cleanup path on mount failure must
+                # clear the prewarm-task global — a stale Task here would leak
+                # across mount attempts (contract MUST:5).
+                assert provider_module._prewarm_task is None, (  # pyright: ignore[reportPrivateUsage]
+                    "Stale prewarm task left in module global after mount failure"
+                )
+        finally:
+            provider_module._shared_client = None  # pyright: ignore[reportPrivateUsage]
+            provider_module._shared_client_refcount = 0  # pyright: ignore[reportPrivateUsage]
+            provider_module._prewarm_task = None  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_cancel_prewarm_task_does_not_raise_on_inner_exception(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A non-CancelledError surfacing from the awaited prewarm task MUST
+        be suppressed by _cancel_prewarm_task and MUST be logged by _prewarm().
+
+        Pins the contract between the two layers:
+          * _prewarm() at __init__.py:374-386 catches Exception and emits a
+            redacted ``logger.warning`` — the primary observability signal.
+          * _cancel_prewarm_task at __init__.py:228-248 suppresses any leaked
+            Exception so the cancel path stays clean during mount failures.
+
+        If a future refactor removes _prewarm()'s inner ``except``, this test
+        still proves _cancel_prewarm_task doesn't raise — preventing a silent
+        regression where prewarm errors crash shutdown. The complementary
+        assertion (warning fired) catches the inverse: if someone deletes the
+        cancel-site suppression AND the inner handler, both signals vanish.
+
+        Contract: sdk-protection:Subprocess:MUST:5
+        """
+        import logging
+
+        import amplifier_module_provider_github_copilot as provider_module
+
+        async def failing_prewarm() -> None:
+            raise RuntimeError("prewarm exploded")
+
+        # Drive the prewarm coroutine to completion so the task captures the
+        # RuntimeError before we await it inside _cancel_prewarm_task. (If we
+        # cancel before the task runs, CancelledError wins and the inner
+        # except never fires.)
+        provider_module._prewarm_task = asyncio.create_task(failing_prewarm())  # pyright: ignore[reportPrivateUsage]
+        await asyncio.sleep(0)
+        # Let the task observe its own exception
+        with contextlib.suppress(RuntimeError):
+            await provider_module._prewarm_task  # pyright: ignore[reportPrivateUsage]
+        # Reset the global to the now-completed task and exercise cancel path
+        # against an already-done task that raised. The function must not
+        # propagate the inner RuntimeError.
+        try:
+            with caplog.at_level(logging.WARNING):
+                await provider_module._cancel_prewarm_task()  # pyright: ignore[reportPrivateUsage]
+        finally:
+            provider_module._prewarm_task = None  # pyright: ignore[reportPrivateUsage]
+
+        # Module-global must be cleared regardless of the inner exception.
+        assert provider_module._prewarm_task is None, (  # pyright: ignore[reportPrivateUsage]
+            "_cancel_prewarm_task must clear the module global even when the "
+            "awaited task raised a non-CancelledError."
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancel_prewarm_task_suppresses_inner_exception_branch(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The bare ``except Exception`` at __init__.py:244 MUST execute when a
+        non-cancelled prewarm task surfaces a non-CancelledError after cancel.
+
+        The companion test above (test_cancel_prewarm_task_does_not_raise_on_
+        inner_exception) pre-resolves the task, so _cancel_prewarm_task short-
+        circuits at the ``task.done()`` guard and never reaches the suppress
+        site. This test exercises the live branch: it installs a task that is
+        still pending at cancel time and that catches CancelledError to re-raise
+        RuntimeError, then asserts:
+
+          * _cancel_prewarm_task() returns without propagating the RuntimeError
+          * the DEBUG suppression log record is emitted (proves the branch ran)
+          * _prewarm_task module global is cleared
+
+        Contract: sdk-protection:Subprocess:MUST:5
+        """
+        import logging
+
+        import amplifier_module_provider_github_copilot as provider_module
+
+        started = asyncio.Event()
+
+        async def cancel_to_runtime_error() -> None:
+            try:
+                started.set()
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError as exc:
+                raise RuntimeError("cancel-converted-to-runtime-error") from exc
+
+        provider_module._prewarm_task = asyncio.create_task(cancel_to_runtime_error())  # pyright: ignore[reportPrivateUsage]
+        await started.wait()
+        assert not provider_module._prewarm_task.done(), (  # pyright: ignore[reportPrivateUsage]
+            "Setup invariant: task must still be pending so _cancel_prewarm_task "
+            "reaches the cancel/await branch (not the task.done() short-circuit)."
+        )
+
+        try:
+            with caplog.at_level(
+                logging.DEBUG, logger="amplifier_module_provider_github_copilot"
+            ):
+                await provider_module._cancel_prewarm_task()  # pyright: ignore[reportPrivateUsage]
+        finally:
+            provider_module._prewarm_task = None  # pyright: ignore[reportPrivateUsage]
+
+        assert provider_module._prewarm_task is None, (  # pyright: ignore[reportPrivateUsage]
+            "_cancel_prewarm_task must clear the module global after suppressing "
+            "the inner RuntimeError."
+        )
+
+        debug_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.DEBUG
+            and r.name == "amplifier_module_provider_github_copilot"
+            and "cancel-site suppressed" in r.getMessage()
+        ]
+        assert len(debug_records) == 1, (
+            "The bare ``except Exception`` branch at __init__.py:244 MUST emit "
+            "exactly one DEBUG record so a future regression that removes "
+            "_prewarm()'s inner handler still leaves a traceable signal. "
+            f"Captured records: {[(r.name, r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
+
 
 class TestTokenFallbackSecurityExtended:
     """Extended security tests for token fallback behavior.
@@ -982,7 +1207,7 @@ class TestTokenFallbackSecurityExtended:
     When explicit token is provided but SDK can't apply it:
     - ALWAYS fail closed with ConfigurationError
     - No escape hatches - security behavior is unconditional
-    - If tests need to avoid this: clear token env vars, don't mock SubprocessConfig=None
+    - If tests need to avoid this: clear token env vars, don't mask constructor failures
 
     The SKIP_SDK_CHECK env var controls SDK _imports_ only, NOT auth behavior.
     """
@@ -992,60 +1217,69 @@ class TestTokenFallbackSecurityExtended:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Explicit token ALWAYS fails closed when SubprocessConfig unavailable.
+        """Explicit token ALWAYS raises ConfigurationError when CopilotClient is None.
 
-        P1-6 Security Fix: SKIP_SDK_CHECK escape hatch removed.
-        An explicit token MUST NEVER be silently ignored - this prevents
-        unintended privilege escalation from ambient auth fallback.
+        SKIP_SDK_CHECK does not provide an escape hatch — token failure is
+        unconditional when no SDK client is available.
 
         Contract: sdk-boundary:Auth:MUST:3
         """
-        import pytest
+        from amplifier_core.llm_errors import ConfigurationError
 
+        import amplifier_module_provider_github_copilot.sdk_adapter.client as client_mod
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
 
-        # Even with SKIP_SDK_CHECK set (test mode), token MUST fail closed
-        monkeypatch.setenv("SKIP_SDK_CHECK", "1")
+        # Substitute SDK client with None — test-mode invariant; SKIP_SDK_CHECK has no effect.
+        monkeypatch.setattr(client_mod, "CopilotClient", None)
         monkeypatch.setenv("GITHUB_TOKEN", "test-token-value")
 
-        mock_session = AsyncMock(spec=_MockSDKSession)
-        mock_session.session_id = "security-test"
-        mock_session.disconnect = AsyncMock()
-
-        class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+        wrapper = CopilotClientWrapper()
+        with pytest.raises(ConfigurationError) as exc_info:
+            async with wrapper.session(model="gpt-4"):
                 pass
 
-            async def start(self) -> None:
+        err = str(exc_info.value)
+        assert "CopilotClient" in err
+        assert "Cannot apply token" in err
+
+    @pytest.mark.asyncio
+    async def test_no_token_with_none_client_raises_runtime_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No token + None CopilotClient => RuntimeError naming the SDK floor.
+
+        Covers the second branch of the ``sdk_client_cls is None`` guard at
+        ``sdk_adapter/client.py:374-377``. The token branch fails with
+        ``ConfigurationError`` (test above); the no-token branch must surface
+        ``RuntimeError`` so production code that loses the SDK symbol does
+        not silently proceed into ``None(**kwargs)``.
+
+        Contract: sdk-boundary:Membrane:MUST:5 (production needs >=1.0.0b10).
+        """
+        from amplifier_core.llm_errors import ProviderUnavailableError
+
+        import amplifier_module_provider_github_copilot.sdk_adapter.client as client_mod
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        monkeypatch.setattr(client_mod, "CopilotClient", None)
+        for var in ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+
+        wrapper = CopilotClientWrapper()
+        with pytest.raises(ProviderUnavailableError) as exc_info:
+            async with wrapper.session(model="gpt-4"):
                 pass
 
-            async def create_session(self, **kwargs: Any) -> Any:
-                return mock_session
-
-            async def stop(self) -> None:
-                pass
-
-        with (
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                None,
-            ),
-        ):
-            wrapper = CopilotClientWrapper()
-            # MUST raise - P1-6: token failure is never silent
-            with pytest.raises(Exception) as exc_info:
-                async with wrapper.session(model="gpt-4"):
-                    pass
-
-            err = str(exc_info.value)
-            assert "SubprocessConfig" in err
-            assert "failing closed to prevent unintended default authentication" in err
+        err = str(exc_info.value)
+        assert "CopilotClient unavailable" in err
+        assert "1.0.0b10" in err
+        # The bare RuntimeError chain must survive translation as the cause.
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
 
     @pytest.mark.asyncio
     async def test_no_error_when_no_token(
@@ -1072,7 +1306,15 @@ class TestTokenFallbackSecurityExtended:
         mock_session.disconnect = AsyncMock()
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 pass
 
             async def start(self) -> None:
@@ -1088,10 +1330,6 @@ class TestTokenFallbackSecurityExtended:
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                 MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                None,
             ),
         ):
             wrapper = CopilotClientWrapper()
@@ -1147,7 +1385,15 @@ class TestCopilotPidTracking:
             pid = 12345
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 self._process = MockProcess()
 
             async def start(self) -> None:
@@ -1245,7 +1491,15 @@ class TestPublicPrewarmAPI:
         init_called = False
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 nonlocal init_called
                 init_called = True
 
@@ -1261,10 +1515,6 @@ class TestPublicPrewarmAPI:
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                 MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                MagicMock(),
             ),
         ):
             await wrapper.prewarm()
@@ -1285,7 +1535,15 @@ class TestPublicPrewarmAPI:
         init_count = 0
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 nonlocal init_count
                 init_count += 1
 
@@ -1301,10 +1559,6 @@ class TestPublicPrewarmAPI:
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                 MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                MagicMock(),
             ),
         ):
             await wrapper.prewarm()
@@ -1476,7 +1730,15 @@ class TestEnsureExecutableWiring:
             return True
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 pass
 
             async def start(self) -> None:
@@ -1495,10 +1757,6 @@ class TestEnsureExecutableWiring:
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                 MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                None,
             ),
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
@@ -1558,7 +1816,15 @@ class TestEnsureExecutableWiring:
             return False
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 pass
 
             async def start(self) -> None:
@@ -1572,10 +1838,6 @@ class TestEnsureExecutableWiring:
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                 MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                None,
             ),
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
@@ -1636,7 +1898,15 @@ class TestEnsureExecutableWiring:
         )
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 pass
 
             async def start(self) -> None:
@@ -1649,10 +1919,6 @@ class TestEnsureExecutableWiring:
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                 MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                None,
             ),
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
@@ -1705,7 +1971,15 @@ class TestEnsureExecutableWiring:
         )
 
         class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 pass
 
             async def start(self) -> None:
@@ -1718,10 +1992,6 @@ class TestEnsureExecutableWiring:
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                 MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                None,
             ),
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
@@ -1754,17 +2024,17 @@ class TestEnsureExecutableWiring:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """ConfigurationError raised inside the session-creation try block MUST
-        propagate as ConfigurationError, NOT be re-wrapped as
-        ProviderUnavailableError by the catchall translator.
+        """ConfigurationError raised by CopilotClient constructor MUST propagate as
+        ConfigurationError, NOT be re-wrapped as ProviderUnavailableError by the
+        catchall translator.
 
-        Rationale: ConfigurationError signals "user misconfigured this" —
-        a fail-closed condition (Security P1-6) that orchestrators MUST NOT
-        treat as transient unavailability. Re-wrapping would change retry
-        semantics and obscure the user-facing fix.
+        Rationale: ConfigurationError signals "user misconfigured this" — a
+        fail-closed condition that orchestrators MUST NOT treat as transient
+        unavailability. Re-wrapping would change retry semantics and obscure
+        the user-facing fix.
 
-        Trigger path: explicit GITHUB_TOKEN env var + SDK SubprocessConfig
-        unavailable → fail-closed at client.py (token cannot be applied).
+        Trigger path: CopilotClient constructor raises ConfigurationError →
+        except (ProviderUnavailableError, ConfigurationError): raise preserves type.
 
         Contract: sdk-boundary:BinaryResolution:MUST:10
         """
@@ -1772,21 +2042,17 @@ class TestEnsureExecutableWiring:
 
         from amplifier_core.llm_errors import ConfigurationError
 
+        import amplifier_module_provider_github_copilot.sdk_adapter.client as client_mod
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
 
-        class MockCopilotClient:
-            def __init__(self, config: Any = None) -> None:
-                pass
-
-            async def start(self) -> None:
-                pass
-
-            async def stop(self) -> None:
-                pass
-
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token_p1_6_failclosed")
+        class FakeCopilotClient:
+            def __init__(self, **_: Any) -> None:
+                raise ConfigurationError(
+                    "failing closed to prevent unintended default authentication",
+                    provider="github-copilot",
+                )
 
         translate_calls: list[Exception] = []
 
@@ -1794,23 +2060,10 @@ class TestEnsureExecutableWiring:
             translate_calls.append(exc)
             return ConfigurationError("translated", provider="github-copilot")
 
-        with (
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                None,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",
-                lambda: None,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.error_translation.translate_sdk_error",
-                spy_translate,
-            ),
+        monkeypatch.setattr(client_mod, "CopilotClient", FakeCopilotClient)
+        with patch(
+            "amplifier_module_provider_github_copilot.error_translation.translate_sdk_error",
+            spy_translate,
         ):
             wrapper = CopilotClientWrapper()
             with pytest.raises(ConfigurationError) as exc_info:
@@ -1832,7 +2085,7 @@ class TestEnsureExecutableWiring:
         )
         # Verify the ORIGINAL message survived (proves no re-wrapping).
         assert "failing closed" in str(exc_info.value).lower(), (
-            f"original Security P1-6 message must survive; got: {exc_info.value!s}"
+            f"original fail-closed message must survive; got: {exc_info.value!s}"
         )
         assert exc_info.value.provider == "github-copilot"
 
@@ -1867,7 +2120,15 @@ class TestEnsureExecutableWiring:
         class MockCopilotClient:
             instances: list[Any] = []
 
-            def __init__(self, config: Any = None) -> None:
+            def __init__(
+                self,
+                *,
+                base_directory: str,
+                github_token: str | None = None,
+                log_level: str = "info",
+                env: dict[str, str],
+                mode: str,
+            ) -> None:
                 MockCopilotClient.instances.append(self)
                 self.started = False
 
@@ -1883,10 +2144,6 @@ class TestEnsureExecutableWiring:
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                 MockCopilotClient,
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                None,
             ),
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client.locate_cli_binary",

@@ -8,8 +8,7 @@ Tests for:
 - MagicMock with spec= for type safety
 - Concurrent session deny hook verification
 
-Note: These tests mock SubprocessConfig as non-None to avoid triggering
-the P1-6 security fix (fail-closed when token cannot be applied).
+Note: These tests pin the b10 CopilotClient keyword-argument constructor.
 """
 
 from __future__ import annotations
@@ -22,23 +21,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from amplifier_core import ModuleCoordinator
-
-
-# Mock SubprocessConfig that accepts github_token
-class MockSubprocessConfig:
-    """Mock SubprocessConfig that accepts github_token."""
-
-    def __init__(
-        self,
-        github_token: str | None = None,
-        log_level: str = "info",
-        copilot_home: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> None:
-        self.github_token = github_token
-        self.log_level = log_level
-        self.copilot_home = copilot_home
-        self.env = env
 
 
 class TestMountFailurePath:
@@ -160,14 +142,20 @@ class TestConcurrentSessionDenyHook:
 
         mock_client_instance.create_session = mock_create_session
 
+        def construct_client(
+            *,
+            base_directory: str,
+            github_token: str | None = None,
+            log_level: str = "info",
+            env: dict[str, str],
+            mode: str = "copilot-cli",
+        ) -> Any:
+            return mock_client_instance
+
         with (
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                MagicMock(return_value=mock_client_instance),
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                MockSubprocessConfig,
+                construct_client,
             ),
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client._resolve_token",
@@ -228,14 +216,20 @@ class TestConcurrentSessionDenyHook:
 
         mock_client_instance.create_session = mock_create_session
 
+        def construct_client(
+            *,
+            base_directory: str,
+            github_token: str | None = None,
+            log_level: str = "info",
+            env: dict[str, str],
+            mode: str = "copilot-cli",
+        ) -> Any:
+            return mock_client_instance
+
         with (
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                MagicMock(return_value=mock_client_instance),
-            ),
-            patch(
-                "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                MockSubprocessConfig,
+                construct_client,
             ),
             patch(
                 "amplifier_module_provider_github_copilot.sdk_adapter.client._resolve_token",

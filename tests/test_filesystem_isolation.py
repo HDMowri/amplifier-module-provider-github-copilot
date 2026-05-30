@@ -27,10 +27,17 @@ def _iter_py_files() -> list[Path]:
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     for k in (
-        ENV_VAR_NAME, "XDG_DATA_HOME", "XDG_CACHE_HOME", "LOCALAPPDATA",
-        "AMPLIFIER_HOME", "AMPLIFIER_APP_CLI_HOME", "AMPLIFIER_DISTRO_HOME",
-        "AMPLIFIER_RUNTIME_HOME", "AMPLIFIER_FOUNDATION_HOME",
-        "COPILOT_HOME", "COPILOT_CLI_PATH",
+        ENV_VAR_NAME,
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "LOCALAPPDATA",
+        "AMPLIFIER_HOME",
+        "AMPLIFIER_APP_CLI_HOME",
+        "AMPLIFIER_DISTRO_HOME",
+        "AMPLIFIER_RUNTIME_HOME",
+        "AMPLIFIER_FOUNDATION_HOME",
+        "COPILOT_HOME",
+        "COPILOT_CLI_PATH",
     ):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
@@ -160,8 +167,8 @@ def test_dot_amplifier_and_dot_copilot_never_probed_or_resolved(
                 and any(f in node.value for f in forbidden_literals)
             ):
                 found.append(f"{rel}:{node.lineno} {node.value!r}")
-    assert found == [], (
-        "Forbidden ~/.amplifier or ~/.copilot literal references:\n" + "\n".join(found)
+    assert found == [], "Forbidden ~/.amplifier or ~/.copilot literal references:\n" + "\n".join(
+        found
     )
 
 
@@ -172,7 +179,7 @@ async def test_constructor_injection_overrides_env_resolution(
 ) -> None:
     """Host-injected ProviderPaths through CopilotClientWrapper MUST win
     over any env-based resolution and the wiring MUST use those values
-    verbatim when constructing SubprocessConfig.
+    verbatim when constructing CopilotClient kwargs.
     """
     from unittest.mock import patch
 
@@ -187,23 +194,32 @@ async def test_constructor_injection_overrides_env_resolution(
     # Sentinel env that, if read, would visibly point elsewhere.
     clean_env.setenv(ENV_VAR_NAME, str(tmp_path / "env-target"))
 
-    cfg_calls: list[dict] = []
-
-    class _FakeCfg:
-        def __init__(self, **kwargs):
-            cfg_calls.append(kwargs)
+    ctor_calls: list[dict[str, object]] = []
 
     class _FakeClient:
-        def __init__(self, cfg):
-            self.cfg = cfg
+        def __init__(
+            self,
+            *,
+            base_directory: str,
+            github_token: str | None = None,
+            log_level: str = "info",
+            env: dict[str, str],
+            mode: str = "copilot-cli",
+        ) -> None:
+            ctor_calls.append(
+                {
+                    "base_directory": base_directory,
+                    "github_token": github_token,
+                    "log_level": log_level,
+                    "env": env,
+                    "mode": mode,
+                }
+            )
 
         async def start(self):
-            raise RuntimeError("intentional — only probing SubprocessConfig kwargs")
+            raise RuntimeError("intentional — only probing CopilotClient kwargs")
 
     with patch(
-        "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-        _FakeCfg,
-    ), patch(
         "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
         _FakeClient,
     ):
@@ -213,12 +229,10 @@ async def test_constructor_injection_overrides_env_resolution(
         except Exception:
             pass
 
-    assert cfg_calls, (
-        "Wiring must construct SubprocessConfig (injection-or-load path)"
-    )
-    assert cfg_calls[0]["copilot_home"] == str(injected.provider_home), (
-        f"Injected provider_home MUST flow to copilot_home verbatim; "
-        f"got {cfg_calls[0]['copilot_home']!r}, expected {injected.provider_home!s}"
+    assert ctor_calls, "Wiring must construct CopilotClient (injection-or-load path)"
+    assert ctor_calls[0]["base_directory"] == str(injected.provider_home), (
+        f"Injected provider_home MUST flow to base_directory verbatim; "
+        f"got {ctor_calls[0]['base_directory']!r}, expected {injected.provider_home!s}"
     )
 
 

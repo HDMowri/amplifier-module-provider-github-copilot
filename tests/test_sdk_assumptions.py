@@ -12,10 +12,14 @@ Run: pytest -m sdk_assumption -v
 
 from __future__ import annotations
 
+import importlib
 import inspect
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
+
+from tests._sdk_version_gate import require_sdk
 
 
 @pytest.mark.sdk_assumption
@@ -85,6 +89,18 @@ class TestSDKImportAssumptions:
                 "skill_directories",
                 "custom_agents",
                 "commands",
+                # b10 MinimalMode:MUST:7-14 — 8 new defense-in-depth pins
+                # forwarded by _minimal_mode_session_config(). See
+                # contracts/sdk-boundary.md v1.9 History row and
+                # config/_sdk_protection.py:59-96 for the wire shape.
+                "enable_session_store",
+                "enable_skills",
+                "enable_file_hooks",
+                "enable_host_git_operations",
+                "enable_on_demand_instruction_discovery",
+                "skip_embedding_retrieval",
+                "embedding_cache_storage",
+                "enable_session_telemetry",
             }
         )
 
@@ -118,44 +134,121 @@ class TestSDKImportAssumptions:
         assert inspect.iscoroutinefunction(sdk_module.CopilotClient.start)
         assert inspect.iscoroutinefunction(sdk_module.CopilotClient.stop)
 
-    def test_subprocess_config_importable(self, sdk_module: Any) -> None:
-        """SubprocessConfig must be importable from copilot root (canonical path since v0.2.1).
+    def test_copilot_client_constructor_accepts_pinned_sdk_kwargs(self, sdk_module: Any) -> None:
+        """CopilotClient must expose the b10 keyword constructor surface.
 
         # Contract: sdk-boundary:Auth:MUST:1
 
-        copilot.types was deleted in SDK v0.2.1. SubprocessConfig now lives at copilot root.
-        Verifies _imports.py's direct import path is correct.
+        Verifies the provider's direct-kwarg wiring remains aligned.
         """
-        from copilot import SubprocessConfig  # type: ignore[import-untyped]
+        from pathlib import Path
 
-        assert isinstance(SubprocessConfig, type), (
-            "SubprocessConfig must be a class importable from copilot"
+        from copilot import CopilotClient  # type: ignore[import-untyped]
+
+        assert isinstance(CopilotClient, type), (
+            "CopilotClient must be a class importable from copilot"
         )
-        # Instantiate and verify a known field
-        instance = SubprocessConfig(github_token="test-token")
-        assert instance.github_token == "test-token"
 
-    def test_subprocess_config_cli_args_is_default_factory_list(
-        self, sdk_module: Any
-    ) -> None:
-        """SubprocessConfig.cli_args must default to an empty list, never None.
+        copilot_ctor: Any = CopilotClient
+        instance = copilot_ctor(
+            base_directory=str(Path.cwd() / "logs" / ".pytest-sdk-assumptions-home"),
+            github_token="test-token",
+            log_level="info",
+            env={},
+            mode="copilot-cli",
+        )
+        assert isinstance(instance, CopilotClient), (
+            "Pinned-sdk kwargs must construct a CopilotClient instance, "
+            "not a proxy or exception object (SDKSurface:MUST:8)"
+        )
+        assert inspect.iscoroutinefunction(instance.start), (
+            "Constructed CopilotClient must expose async start() — "
+            "proves the pinned kwarg surface returned a live client"
+        )
 
-        The SDK declares ``cli_args: list[str] = field(default_factory=list)``.
-        If a future SDK relaxes this to ``list[str] | None = None``, the
-        provider's stub and any caller that assumes a non-None list would
-        diverge silently.
+    def test_copilot_client_constructor_is_keyword_only(self, sdk_module: Any) -> None:
+        """CopilotClient.__init__ must keep keyword-only constructor semantics.
+
+        If keyword-only enforcement is relaxed, positional config objects can
+        silently bypass the expected b10 constructor surface.
 
         # Contract: sdk-boundary:SDKSurface:MUST:3
         """
-        import dataclasses
+        signature = inspect.signature(sdk_module.CopilotClient.__init__)
+        positional = [
+            p
+            for p in signature.parameters.values()
+            if p.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and p.name != "self"
+        ]
+        observed = [p.name for p in positional]
+        assert positional == [], (
+            f"CopilotClient.__init__ must be keyword-only; got positional params {observed}"
+        )
 
-        from copilot import SubprocessConfig  # type: ignore[import-untyped]
+    def test_permission_decision_reject_importable(self) -> None:
+        """The b10 rejection variant is constructed without a kind argument.
 
-        fields_by_name = {f.name: f for f in dataclasses.fields(SubprocessConfig)}
-        cli_args = fields_by_name["cli_args"]
-        assert cli_args.default is dataclasses.MISSING
-        assert cli_args.default_factory is list
-        assert SubprocessConfig(github_token="x").cli_args == []
+        Contract: sdk-boundary:SDKSurface:MUST:1b
+        """
+        require_sdk()
+        rpc_mod = cast(Any, importlib.import_module("copilot.generated.rpc"))
+
+        rejection = rpc_mod.PermissionDecisionReject()
+
+        assert rejection.kind == "reject"
+
+    def test_constructor_is_keyword_only(self) -> None:
+        """The b10 client constructor rejects positional config objects.
+
+        Contract: sdk-boundary:SDKSurface:MUST:8
+        """
+        copilot = cast(
+            Any,
+            require_sdk(),
+        )
+
+        with pytest.raises(TypeError):
+            copilot.CopilotClient("/positional/path")
+
+    def test_constructor_accepts_documented_kwargs(self, tmp_path: Path) -> None:
+        """The b10 client constructor accepts the documented process kwargs.
+
+        Contract: sdk-boundary:SDKSurface:MUST:8
+        """
+        copilot = cast(
+            Any,
+            require_sdk(),
+        )
+        client_cls = cast(Any, copilot.CopilotClient)
+
+        client = client_cls(
+            base_directory=str(tmp_path),
+            github_token="t",
+            log_level="info",
+            env={"X": "1"},
+            mode="copilot-cli",
+        )
+
+        assert isinstance(client, client_cls)
+
+    def test_mode_default_is_copilot_cli(self) -> None:
+        """The b10 runtime defaults clients to copilot-cli mode after install.
+
+        Contract: sdk-boundary:SDKSurface:MUST:8
+        """
+        copilot = cast(
+            Any,
+            require_sdk(),
+        )
+
+        signature = inspect.signature(copilot.CopilotClient.__init__)
+
+        assert signature.parameters["mode"].default == "copilot-cli"
 
     def test_model_info_capabilities_is_required(self, sdk_module: Any) -> None:
         """ModelInfo.capabilities must be a required field with no default.
@@ -171,7 +264,7 @@ class TestSDKImportAssumptions:
 
         from copilot.client import ModelInfo  # type: ignore[import-untyped]
 
-        fields_by_name = {f.name: f for f in dataclasses.fields(ModelInfo)}
+        fields_by_name = {f.name: f for f in dataclasses.fields(ModelInfo)}  # pyright: ignore[reportArgumentType]
         capabilities = fields_by_name["capabilities"]
         assert capabilities.default is dataclasses.MISSING
         assert capabilities.default_factory is dataclasses.MISSING
@@ -198,9 +291,7 @@ class TestModelBillingServerShapeTolerance:
     Contract: sdk-boundary:SDKSurface:MUST:3
     """
 
-    def test_model_billing_tolerates_server_shape_without_multiplier(
-        self, sdk_module: Any
-    ) -> None:
+    def test_model_billing_tolerates_server_shape_without_multiplier(self, sdk_module: Any) -> None:
         """The exact GitHub server-shape payload MUST parse without raising.
 
         Reproduces the live GitHub server-shape payload that aborted SDK
@@ -213,8 +304,12 @@ class TestModelBillingServerShapeTolerance:
         # Exact shape captured from live `models.list` JSON-RPC response.
         live_server_shape = {
             "restricted_to": [
-                "pro", "pro_plus", "individual_trial",
-                "business", "enterprise", "max",
+                "pro",
+                "pro_plus",
+                "individual_trial",
+                "business",
+                "enterprise",
+                "max",
             ],
             "token_prices": {
                 "batch_size": 1_000_000,
@@ -225,7 +320,7 @@ class TestModelBillingServerShapeTolerance:
         }
 
         # MUST NOT raise — the whole point of the v1.0.0b4 fix.
-        billing = ModelBilling.from_dict(live_server_shape)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        billing = ModelBilling.from_dict(live_server_shape)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportAttributeAccessIssue]
 
         # Multiplier MUST be absent / None (not invented as 0.0 or 1.0).
         multiplier = getattr(billing, "multiplier", None)  # pyright: ignore[reportUnknownArgumentType]
@@ -274,11 +369,18 @@ class TestModelBillingServerShapeTolerance:
         }
 
         # MUST NOT raise — this is the exact path list_models() walks.
-        model = ModelInfo.from_dict(live_model_payload)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        model = ModelInfo.from_dict(live_model_payload)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportAttributeAccessIssue]
         model_id: str = getattr(model, "id", "")  # pyright: ignore[reportUnknownArgumentType]
         billing = getattr(model, "billing", None)  # pyright: ignore[reportUnknownArgumentType]
+        from copilot.client import ModelBilling  # type: ignore[import-untyped]
+
         assert model_id == "claude-sonnet-4.6"
-        assert billing is not None
+        # isinstance check IS the existence check (None is not a ModelBilling),
+        # while also pinning the exact SDK type returned by from_dict — fails
+        # loud if a future SDK swaps the return type.
+        assert isinstance(billing, ModelBilling), (
+            f"Expected ModelBilling instance; got {type(billing).__name__}: {billing!r}"
+        )
         assert getattr(billing, "multiplier", None) is None  # pyright: ignore[reportUnknownArgumentType]
 
 
@@ -299,35 +401,36 @@ class TestPermissionRequestResultV030Schema:
     """
 
     def test_kind_literal_contains_exactly_v030_values(self, sdk_module: Any) -> None:
-        """PermissionRequestResultKind Literal MUST equal exactly the v0.3.0 set.
+        """PermissionDecisionReject.kind ClassVar MUST equal 'reject' (deny-destroy pin).
 
-        If the SDK adds, removes, or renames a kind value, our factory and
-        deny-destroy flow may silently break. Pin the set explicitly.
+        SDK v1.0.0b10 (since b9) removes PermissionRequestResultKind; the discriminator is now
+        a ClassVar on each concrete Union member of PermissionRequestResult.
+        Pins the kind value the provider's deny-destroy path depends on.
 
         Contract: sdk-boundary:SDKSurface:MUST:1
         """
         from typing import get_args
 
-        from copilot.session import PermissionRequestResultKind  # type: ignore[import-untyped]
+        from copilot.generated.rpc import PermissionDecisionReject  # type: ignore[import-untyped]
+        from copilot.session import PermissionRequestResult  # type: ignore[import-untyped]
 
-        observed = set(get_args(PermissionRequestResultKind))
-        expected = {"approve-once", "reject", "user-not-available", "no-result"}
-        assert observed == expected, (
-            f"SDK PermissionRequestResultKind drifted from v0.3.0 contract.\n"
-            f"  Expected: {sorted(expected)}\n"
-            f"  Observed: {sorted(observed)}\n"
-            f"  Added: {sorted(observed - expected)}\n"
-            f"  Removed: {sorted(expected - observed)}\n"
-            f"Update _imports.make_permission_denied() and rerun the SDK diff workflow."
+        members = get_args(PermissionRequestResult)
+        member_names = {cls.__name__ for cls in members}
+        assert "PermissionDecisionReject" in member_names, (
+            f"PermissionDecisionReject missing from PermissionRequestResult Union. "
+            f"Got: {sorted(member_names)}"
+        )
+        assert PermissionDecisionReject.kind == "reject", (
+            f"PermissionDecisionReject.kind is {PermissionDecisionReject.kind!r}, "
+            "expected 'reject'. The deny-destroy flow depends on this discriminator."
         )
 
     def test_factory_produces_sdk_accepted_reject_result(self, sdk_module: Any) -> None:
         """make_permission_denied() MUST construct a real SDK object with kind='reject'.
 
         End-to-end check: the factory's output is assignable to a real SDK
-        PermissionRequestResult and carries the v0.3.0 'reject' kind. Also
-        verifies the result has NO legacy v0.2.x fields (rules/feedback/message/path)
-        since the SDK contract now forbids them.
+        PermissionRequestResult and carries the 'reject' kind. Also verifies
+        feedback is None (silent-reject UX — no user-visible message on the wire).
 
         SKIP_SDK_CHECK is cleared and _imports is reloaded so the factory exercises
         the real SDK code path (conftest.py sets SKIP_SDK_CHECK=1 by default to keep
@@ -359,17 +462,64 @@ class TestPermissionRequestResultV030Schema:
             f"Factory returned {type(result).__name__}, expected PermissionRequestResult. "
             "Dict fallback should only occur in test mode (SKIP_SDK_CHECK=1)."
         )
-        # Exact v0.3.0 kind
+        # Exact b10 kind for deny-destroy path
         assert result.kind == "reject", (
             f"Factory returned kind={result.kind!r}, expected 'reject'. "
             "v0.2.x used 'denied-by-rules' — never reintroduce."
         )
-        # v0.3.0 dataclass fields are exactly ('kind',) — exact tuple, not blocklist
-        actual_fields = tuple(f.name for f in dataclasses.fields(PermissionRequestResult))
-        assert actual_fields == ("kind",), (
-            f"PermissionRequestResult fields={actual_fields!r} expected exactly ('kind',). "
-            "v0.3.0 reduced the surface to kind-only — SDK regressed."
+        # b10 silent-reject: feedback must be None (no user-visible message on the wire)
+        assert result.feedback is None, (  # pyright: ignore[reportAttributeAccessIssue]
+            f"Factory returned feedback={result.feedback!r}, expected None. "  # pyright: ignore[reportAttributeAccessIssue]
+            "Silent-reject UX requires no feedback payload."
         )
+        # b10: PermissionDecisionReject is a @dataclass; 'kind' is ClassVar (not a field),
+        # 'feedback' is the only instance field.
+        from copilot.generated.rpc import (  # type: ignore[import-untyped]
+            PermissionDecisionReject as _RejCls,
+        )
+
+        actual_fields = tuple(f.name for f in dataclasses.fields(_RejCls))
+        assert actual_fields == ("feedback",), (
+            f"PermissionDecisionReject dataclass fields={actual_fields!r}, "
+            "expected exactly ('feedback',). "
+            "'kind' is a ClassVar in b10 — SDK regressed if this changes."
+        )
+
+    def test_permission_decision_reject_to_dict_wire_shape(self, sdk_module: Any) -> None:
+        """PermissionDecisionReject().to_dict() MUST emit {"kind": "reject"} — no feedback key.
+
+        The dict-fallback in _imports.make_permission_denied (when SDK is absent)
+        constructs exactly this payload; without this assertion an SDK minor-version
+        bump that changes to_dict() to include ``"feedback": None`` (or omits
+        ``kind``) would silently desynchronise the dict-fallback from the real
+        SDK wire shape, regressing deny-destroy without a failing test.
+
+        Contract: sdk-boundary:SDKSurface:MUST:1
+        Contract: deny-destroy:PermissionRequest:MUST:2
+        """
+        from copilot.generated.rpc import (  # type: ignore[import-untyped]
+            PermissionDecisionReject,
+        )
+
+        result = PermissionDecisionReject().to_dict()
+
+        assert result == {"kind": "reject"}, (
+            f"PermissionDecisionReject().to_dict() returned {result!r}, "
+            "expected exactly {'kind': 'reject'}. Silent-reject wire shape "
+            "MUST omit feedback when None — the dict-fallback in "
+            "_imports.make_permission_denied depends on this."
+        )
+
+    def test_permission_request_result_is_alias_not_constructor(self) -> None:
+        """The b10 permission-request result alias cannot be constructed directly.
+
+        Contract: sdk-boundary:SDKSurface:MUST:1a
+        """
+        require_sdk()
+        session_mod = cast(Any, importlib.import_module("copilot.session"))
+
+        with pytest.raises(TypeError):
+            session_mod.PermissionRequestResult()
 
 
 @pytest.mark.sdk_assumption
@@ -385,9 +535,7 @@ class TestReasoningEffortLiteralPin:
     test goes red because the union member is no longer the Literal.
     """
 
-    def test_create_session_reasoning_effort_annotation_is_literal(
-        self, sdk_module: Any
-    ) -> None:
+    def test_create_session_reasoning_effort_annotation_is_literal(self, sdk_module: Any) -> None:
         """``CopilotClient.create_session(reasoning_effort=...)`` MUST be typed
         as ``ReasoningEffort | None`` so the provider's pre-validated value
         is type-compatible at the SDK boundary. If the SDK switches the
@@ -399,11 +547,16 @@ class TestReasoningEffortLiteralPin:
         from typing import Union, get_args, get_origin
 
         sig = inspect.signature(sdk_module.CopilotClient.create_session)
-        param = sig.parameters.get("reasoning_effort")
-        assert param is not None, (
-            "create_session lost the reasoning_effort named parameter. "
-            "Provider forwarding chain is broken."
-        )
+        # Direct subscript — KeyError fails loud if the parameter is renamed
+        # or removed, with a more useful message than an `is not None` check.
+        try:
+            param = sig.parameters["reasoning_effort"]
+        except KeyError as exc:
+            pytest.fail(
+                "create_session lost the reasoning_effort named parameter. "
+                f"Provider forwarding chain is broken. Available params: "
+                f"{sorted(sig.parameters.keys())!r} ({exc})"
+            )
 
         ann = param.annotation
         # Resolve string-form annotations from `from __future__ import annotations`
@@ -431,9 +584,7 @@ class TestReasoningEffortLiteralPin:
             f"allowlist may need to follow the SDK's chosen Literal."
         )
 
-    def test_fallback_allowlist_matches_sdk_reasoning_effort_literal(
-        self, sdk_module: Any
-    ) -> None:
+    def test_fallback_allowlist_matches_sdk_reasoning_effort_literal(self, sdk_module: Any) -> None:
         """``_REASONING_EFFORT_FALLBACK_ALLOWLIST`` MUST equal
         ``frozenset(get_args(ReasoningEffort))`` so a future SDK Literal
         addition (e.g. ``"ultra"``) is caught here at CI time rather than
@@ -502,8 +653,7 @@ class TestOverrideDataclassShapes:
         )
         for f in dataclasses.fields(cls):
             assert f.default is None, (
-                f"ModelSupportsOverride.{f.name} default is {f.default!r}; "
-                f"stub claims None."
+                f"ModelSupportsOverride.{f.name} default is {f.default!r}; stub claims None."
             )
 
     def test_model_vision_limits_override_dataclass_shape(self, sdk_module: Any) -> None:
@@ -526,8 +676,7 @@ class TestOverrideDataclassShapes:
         )
         for f in dataclasses.fields(cls):
             assert f.default is None, (
-                f"ModelVisionLimitsOverride.{f.name} default is {f.default!r}; "
-                f"stub claims None."
+                f"ModelVisionLimitsOverride.{f.name} default is {f.default!r}; stub claims None."
             )
 
 
@@ -583,14 +732,14 @@ class TestCopilotSessionWorkspacePathIsCachedProperty:
 @pytest.mark.sdk_assumption
 class TestCopilotSessionSendSignaturePin:
     """``CopilotSession.send`` MUST accept exactly one positional argument
-    (``prompt``) and three keyword-only arguments (``attachments``, ``mode``,
-    ``request_headers``). The provider's ``CopilotClientWrapper`` calls
-    ``session.send(prompt, attachments=..., mode=..., request_headers=...)``;
-    the in-tree mock at ``tests/fixtures/sdk_mocks.py`` mirrors that surface
-    so unit tests don't drift from production behaviour. If the SDK adds,
-    removes, or renames a kwarg, the mock will silently absorb it (because
-    the provider's call site uses named kwargs) and tests would stay green
-    against a divergent contract.
+    (``prompt``) and five keyword-only arguments (``attachments``, ``mode``,
+    ``agent_mode``, ``request_headers``, ``display_prompt``). The provider's
+    ``CopilotClientWrapper`` calls ``session.send(prompt, attachments=...)``;
+    the in-tree mock at ``tests/fixtures/sdk_mocks.py`` mirrors the full
+    surface so unit tests don't drift from production behaviour. If the SDK
+    adds, removes, or renames a kwarg, the mock will silently absorb it
+    (because the provider's call site uses named kwargs) and tests would
+    stay green against a divergent contract.
 
     This is an SDK-import-boundary pin, not a behavioural assertion: it
     inspects the live ``CopilotSession.send`` signature and asserts the
@@ -611,16 +760,10 @@ class TestCopilotSessionSendSignaturePin:
         params = [p for name, p in sig.parameters.items() if name != "self"]
 
         positional_or_keyword = [
-            p
-            for p in params
-            if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+            p for p in params if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
         ]
-        keyword_only = [
-            p for p in params if p.kind == inspect.Parameter.KEYWORD_ONLY
-        ]
-        var_positional = [
-            p for p in params if p.kind == inspect.Parameter.VAR_POSITIONAL
-        ]
+        keyword_only = [p for p in params if p.kind == inspect.Parameter.KEYWORD_ONLY]
+        var_positional = [p for p in params if p.kind == inspect.Parameter.VAR_POSITIONAL]
         var_keyword = [p for p in params if p.kind == inspect.Parameter.VAR_KEYWORD]
 
         positional_names = tuple(p.name for p in positional_or_keyword)
@@ -632,7 +775,9 @@ class TestCopilotSessionSendSignaturePin:
         )
 
         keyword_names = frozenset(p.name for p in keyword_only)
-        expected = frozenset({"attachments", "mode", "request_headers"})
+        expected = frozenset(
+            {"agent_mode", "attachments", "display_prompt", "mode", "request_headers"}
+        )
         assert keyword_names == expected, (
             f"CopilotSession.send keyword-only parameters drifted.\n"
             f"  Expected: {sorted(expected)}\n"
@@ -653,4 +798,3 @@ class TestCopilotSessionSendSignaturePin:
             f"CopilotSession.send grew a **kwargs parameter: {var_keyword!r}. "
             f"This breaks the named-kwarg pin and would hide drift."
         )
-
