@@ -21,6 +21,7 @@ from amplifier_module_provider_github_copilot.request_adapter import (
     validate_reasoning_effort,
 )
 from amplifier_module_provider_github_copilot.sdk_adapter import CopilotModelInfo
+from tests._sdk_version_gate import require_sdk
 
 # ----------------------------------------------------------------------------
 # Test fixtures
@@ -149,9 +150,7 @@ class TestResolveReasoningEffortGate:
     def test_raises_when_model_does_not_support(self) -> None:
         info = _model_info(supports=False, allowlist=())
         with pytest.raises(ConfigurationError) as excinfo:
-            validate_reasoning_effort(
-                "medium", info, model_id="claude-haiku-4.5"
-            )
+            validate_reasoning_effort("medium", info, model_id="claude-haiku-4.5")
         msg = str(excinfo.value)
         assert "claude-haiku-4.5" in msg
         assert "does not support" in msg
@@ -160,9 +159,7 @@ class TestResolveReasoningEffortGate:
     def test_raises_when_value_not_in_allowlist(self) -> None:
         info = _model_info(allowlist=("low", "medium", "high"))
         with pytest.raises(ConfigurationError) as excinfo:
-            validate_reasoning_effort(
-                "banana", info, model_id="claude-sonnet-4.6"
-            )
+            validate_reasoning_effort("banana", info, model_id="claude-sonnet-4.6")
         msg = str(excinfo.value)
         assert "claude-sonnet-4.6" in msg
         assert "banana" in msg
@@ -179,9 +176,7 @@ class TestResolveReasoningEffortGate:
         """
         info = _model_info(allowlist=("low", "medium", "high"))
         with pytest.raises(ConfigurationError) as excinfo:
-            validate_reasoning_effort(
-                "Medium", info, model_id="claude-sonnet-4.6"
-            )
+            validate_reasoning_effort("Medium", info, model_id="claude-sonnet-4.6")
         msg = str(excinfo.value)
         # Mixed-case is rejected AND redacted (len=6 placeholder, not the
         # raw "Medium") because uppercase fails the well-formed-token regex.
@@ -203,9 +198,7 @@ class TestResolveReasoningEffortGate:
         info = _model_info()
         oversize = "x" * 200
         with pytest.raises(ConfigurationError) as excinfo:
-            validate_reasoning_effort(
-                oversize, info, model_id="claude-sonnet-4.6"
-            )
+            validate_reasoning_effort(oversize, info, model_id="claude-sonnet-4.6")
         msg = str(excinfo.value)
         assert "SDK literal allowlist" in msg
         assert "<redacted; len=200>" in msg
@@ -220,9 +213,7 @@ class TestResolveReasoningEffortGate:
             logging.INFO,
             logger="amplifier_module_provider_github_copilot.request_adapter",
         ):
-            result = validate_reasoning_effort(
-                "medium", None, model_id="brand-new-model"
-            )
+            result = validate_reasoning_effort("medium", None, model_id="brand-new-model")
         assert result == "medium"
         assert any(
             "deferring final reasoning_effort validation to SDK backstop" in rec.message
@@ -238,9 +229,7 @@ class TestResolveReasoningEffortGate:
         Layer-1 capability gate.
         """
         with pytest.raises(ConfigurationError) as excinfo:
-            validate_reasoning_effort(
-                "frobozz", None, model_id="brand-new-model"
-            )
+            validate_reasoning_effort("frobozz", None, model_id="brand-new-model")
         msg = str(excinfo.value)
         assert "frobozz" in msg
         assert "brand-new-model" in msg
@@ -250,9 +239,7 @@ class TestResolveReasoningEffortGate:
             assert f"'{v}'" in msg
 
     @pytest.mark.parametrize("bad_value", ["High", "MEDIUM", "Low", "xHigh"])
-    def test_mixed_case_rejected_when_supported_efforts_empty(
-        self, bad_value: str
-    ) -> None:
+    def test_mixed_case_rejected_when_supported_efforts_empty(self, bad_value: str) -> None:
         """Contract: provider-protocol:complete:MUST:11
 
         Universal shape gate must reject mixed-case values even when the
@@ -293,9 +280,7 @@ class TestResolveReasoningEffortGate:
         info = _model_info()
         secret_like = "ghp_" + "x" * 36  # mimics a GitHub token shape, len=40
         with pytest.raises(ConfigurationError) as excinfo:
-            validate_reasoning_effort(
-                secret_like, info, model_id="claude-sonnet-4.6"
-            )
+            validate_reasoning_effort(secret_like, info, model_id="claude-sonnet-4.6")
         msg = str(excinfo.value)
         assert "SDK literal allowlist" in msg
         assert "<redacted; len=40>" in msg
@@ -330,9 +315,7 @@ class TestSessionForwardsReasoningEffort:
         ["low", "medium", "high", "xhigh"],
     )
     @pytest.mark.asyncio
-    async def test_value_reaches_sdk_create_session_kwargs(
-        self, effort_value: str
-    ) -> None:
+    async def test_value_reaches_sdk_create_session_kwargs(self, effort_value: str) -> None:
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             CopilotClientWrapper,
         )
@@ -352,21 +335,23 @@ class TestSessionForwardsReasoningEffort:
         async with wrapper.session(
             model="claude-sonnet-4.6", reasoning_effort=effort_value
         ) as handle:
-            assert handle is not None, "session context yielded None"
+            # Direct attribute touch — session_id access fails loud (AttributeError
+            # on None / non-session) without a weak `is not None` placeholder.
+            assert handle.session_id == "sid", (
+                f"session context yielded unexpected handle: {handle!r}"
+            )
 
         # Forwarding assertion
         kwargs = sdk_client.create_session.call_args.kwargs
         assert kwargs.get("reasoning_effort") == effort_value, (
-            f"Expected reasoning_effort={effort_value!r} on create_session, got "
-            f"kwargs={kwargs!r}"
+            f"Expected reasoning_effort={effort_value!r} on create_session, got kwargs={kwargs!r}"
         )
 
         # Lifecycle assertion: SDK session was created exactly once and
         # torn down via disconnect. Removing the ``finally: disconnect()``
         # branch from the wrapper would leak — this catches it.
         assert sdk_client.create_session.await_count == 1, (
-            f"Expected exactly 1 create_session call, got "
-            f"{sdk_client.create_session.await_count}"
+            f"Expected exactly 1 create_session call, got {sdk_client.create_session.await_count}"
         )
         assert fake_sdk_session.disconnect.await_count == 1, (
             f"Expected exactly 1 disconnect() on session teardown, got "
@@ -397,8 +382,7 @@ class TestSessionForwardsReasoningEffort:
 
         kwargs = sdk_client.create_session.call_args.kwargs
         assert "reasoning_effort" not in kwargs, (
-            f"Expected reasoning_effort kwarg absent, got: "
-            f"{kwargs.get('reasoning_effort')!r}"
+            f"Expected reasoning_effort kwarg absent, got: {kwargs.get('reasoning_effort')!r}"
         )
         # Disconnect lifecycle still exercised on the None path.
         assert fake_sdk_session.disconnect.await_count == 1, (
@@ -412,9 +396,7 @@ class TestSessionForwardsReasoningEffort:
 # ----------------------------------------------------------------------------
 
 
-def _make_capturing_wrapper(
-    fake_text: str, clean_text: str
-) -> tuple[Any, list[dict[str, Any]]]:
+def _make_capturing_wrapper(fake_text: str, clean_text: str) -> tuple[Any, list[dict[str, Any]]]:
     """Return (wrapper, session_calls). Call 1 emits fake_text, call 2 clean_text."""
     from tests.fixtures.sdk_mocks import (
         MockSDKSession,
@@ -482,9 +464,7 @@ class TestCompleteThreadsReasoningEffortToBothCallSites:
         request.attachments = None
         request.max_output_tokens = None
         request.reasoning_effort = reasoning_effort
-        request.tools = [
-            {"name": "bash", "description": "Run shell commands", "parameters": {}}
-        ]
+        request.tools = [{"name": "bash", "description": "Run shell commands", "parameters": {}}]
         return request
 
     @pytest.mark.asyncio
@@ -508,8 +488,7 @@ class TestCompleteThreadsReasoningEffortToBothCallSites:
             f"Expected main + correction = 2 session calls, got {session_calls!r}"
         )
         assert session_calls[0]["reasoning_effort"] == "medium", (
-            f"Main session: reasoning_effort lost — got "
-            f"{session_calls[0]['reasoning_effort']!r}"
+            f"Main session: reasoning_effort lost — got {session_calls[0]['reasoning_effort']!r}"
         )
         assert session_calls[1]["reasoning_effort"] == "medium", (
             f"Correction session: reasoning_effort dropped on retry — got "
@@ -656,17 +635,14 @@ class TestProviderRaisesOnUnsupportedCachedModel:
         assert "does not support reasoning_effort" in msg
         # Defense-in-depth: SDK MUST NOT have been touched.
         assert sdk_session_calls == [], (
-            f"Layer-1 gate bypassed; SDK session was opened with: "
-            f"{sdk_session_calls!r}"
+            f"Layer-1 gate bypassed; SDK session was opened with: {sdk_session_calls!r}"
         )
         # Contract: observability:Events:MUST:6. Pre-flight failure emits no
         # llm:request and no llm:response. Operators tracking caller-bug rates
         # consume the [REQUEST_ADAPTER] log channel, not the request/response
         # pair counter. If a future refactor moves validation INSIDE
         # llm_lifecycle, MUST:6 needs to flip and this assertion must follow.
-        emitted_event_names = [
-            call.args[0] for call in coordinator.hooks.emit.call_args_list
-        ]
+        emitted_event_names = [call.args[0] for call in coordinator.hooks.emit.call_args_list]
         forbidden = {"llm:request", "llm:response"}
         leaked = [name for name in emitted_event_names if name in forbidden]
         assert not leaked, (
@@ -706,17 +682,9 @@ class TestLayer2SDKRejectMatchesErrorTranslation:
         self,
     ) -> None:
         import os
+        from pathlib import Path
 
-        try:
-            import copilot  # type: ignore[import-not-found]
-            from copilot.client import (  # type: ignore[import-not-found]
-                SubprocessConfig,
-            )
-        except ImportError:
-            pytest.fail(
-                "copilot SDK not installed; live test cannot run. "
-                "Install via: uv pip install github-copilot-sdk==0.3.0"
-            )
+        copilot = require_sdk()
 
         token = (
             os.environ.get("COPILOT_AGENT_TOKEN")
@@ -741,8 +709,13 @@ class TestLayer2SDKRejectMatchesErrorTranslation:
             deny_permission_request,
         )
 
-        cfg = SubprocessConfig(github_token=token)  # pyright: ignore[reportPossiblyUnbound, reportPossiblyUnboundVariable]
-        client = copilot.CopilotClient(cfg)  # pyright: ignore[reportPossiblyUnbound, reportPossiblyUnboundVariable]
+        client = copilot.CopilotClient(
+            base_directory=str(Path.cwd() / "logs" / ".pytest-reasoning-effort-home"),
+            github_token=token,
+            log_level="info",
+            env=dict(os.environ),
+            mode="copilot-cli",
+        )
         await client.start()
         captured_exc: Exception | None = None
         try:
@@ -772,9 +745,14 @@ class TestLayer2SDKRejectMatchesErrorTranslation:
         finally:
             await client.stop()
 
-        assert captured_exc is not None
-        # Confirm the SDK raises the JsonRpcError shape we expect.
-        assert type(captured_exc).__name__ == "JsonRpcError", (
+        # Live SDK raises ``copilot._jsonrpc.JsonRpcError``. The class is not
+        # re-exported at ``copilot`` root in b10, so the test imports from the
+        # underscored module directly and pins the exact type with isinstance —
+        # avoids the fragile-string-compare anti-pattern and makes a future
+        # rename or hierarchy change fail loud at this assertion.
+        from copilot._jsonrpc import JsonRpcError  # type: ignore[import-untyped]
+
+        assert isinstance(captured_exc, JsonRpcError), (
             f"Live SDK raised {type(captured_exc).__name__} (msg: "
             f"{captured_exc!r}); expected JsonRpcError. Either the SDK error "
             f"hierarchy changed or the backend started rejecting via a "
@@ -809,5 +787,3 @@ class TestLayer2SDKRejectMatchesErrorTranslation:
             "ConfigurationError must chain the original SDK exception via "
             "`raise ... from exc` so traces preserve root cause."
         )
-
-

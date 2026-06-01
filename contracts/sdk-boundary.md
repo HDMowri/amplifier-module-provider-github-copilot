@@ -1,11 +1,15 @@
 # Contract: SDK Boundary (The Membrane)
 
 ## Version
-- **Current:** 1.6 (SDK v1.0.0b4 — hotfix: tolerate server-shape `ModelBilling` without `multiplier`)
+- **Current:** 1.10 (SDK v1.0.0b10 — MinimalMode extended to MUST:1-15 with 9 defense-in-depth session-capability pins)
 - **Module Reference:** amplifier_module_provider_github_copilot/sdk_adapter/
 - **Status:** Non-Negotiable Constraint
-- **Update:** 2026-05-17 — Pin bumped 0.3.0 → 1.0.0b4 to unbreak `amplifier init` / `amplifier provider models` after GitHub server dropped `multiplier` from the `billing` payload. `SDKSurface:MUST:7` registered to pin tolerance at the boundary.
+- **Update:** 2026-06-01 — MinimalMode extended from MUST:1-6 to MUST:1-15. b10 added 8 new `create_session` kwargs gating SDK-internal capabilities (session store, skills loader, file hooks, host git, on-demand instruction discovery, embedding retrieval, embedding cache storage, MCP OAuth token storage), plus the pre-existing b9 `enable_session_telemetry` consolidated here. Helpers at b10 `_mode.py:185-258` only collapse `None` to defaults when `mode == "empty"`; our adapter ships `mode="copilot-cli"` (`sdk_adapter/client.py:419-424`), so leaving any kwarg unset hands control to the bundled CLI. Explicit pin is a real wire-shape change, not intent-pinning. v1.10 pins the 9th mode-gated default (`mcp_oauth_token_storage`) and corrects the v1.9 claim that `mcp_servers={}` foreclosed its wire-emit — it does not; the emit is independent at b10 `client.py:1863-1865`. v1.8 SDKSurface clauses verified byte-compatible against b10 — no production source change beyond the 9 MinimalMode emits.
 - **History:**
+  - **1.10** — SDK v1.0.0b10: MinimalMode:MUST:15 added — `mcp_oauth_token_storage="in-memory"`, the 9th and final SDK mode-gated capability default. Corrects the v1.9 rationale that scoped this switch out: the `mcpOAuthTokenStorage` wire-emit (b10 `client.py:1863-1865`) is an INDEPENDENT `if mcp_oauth_token_storage is not None` block, NOT gated by the `mcpServers` emit (b10 `client.py:1860-1861`), so `mcp_servers={}` (MUST:3) does not foreclose it. Under `mode="copilot-cli"` the helper `_mcp_oauth_token_storage_default` (b10 `_mode.py:251-258`) returns `None` — byte-identical in shape to `_embedding_cache_storage_default` (b10 `_mode.py:201-208`, MUST:13) — so the bundled-CLI default applies unless pinned. Pinned `"in-memory"` to mirror the SDK's own empty-mode default and MUST:13. The only reason there was no live exposure at v1.9 is one level up (no MCP servers ⇒ no OAuth flow), a silent coupling now removed. Closure hardened: `test_no_unpinned_sdk_mode_gated_capability` runtime-enumerates the `_mode` mode-gated helpers so a future 10th default fails loudly. `manage_schedule_enabled` / `coauthor_enabled` remain out of scope — see the MinimalMode Out-of-scope subsection.
+  - **1.9** — SDK v1.0.0b10: MinimalMode:MUST:7-14 added (`enable_session_store=False`, `enable_skills=False`, `enable_file_hooks=False`, `enable_host_git_operations=False`, `enable_on_demand_instruction_discovery=False`, `skip_embedding_retrieval=True`, `embedding_cache_storage="in-memory"`, `enable_session_telemetry=False`). Mode-mismatch rationale: b10 `_mode.py:175-182` `_empty_mode_bool_default` returns `empty_default` ONLY when `mode == "empty"`; our adapter mode is `copilot-cli`. Wire emit at b10 `client.py:1852-1905` only serializes a kwarg when non-`None`. Sub-clauses recorded in MinimalMode constraint + test-anchor tables. Telemetry is pinned `False` because b10 `client.py:1651-1656` documents telemetry as ON-by-default for GitHub-authenticated sessions (our auth path); leaving the kwarg unset would silently opt the provider in. (`mcp_oauth_token_storage` is addressed separately at v1.10 — see above.)
+  - **1.8** — SDK v1.0.0b9: SDKSurface:MUST:6 corrected — `copilot.session.CopilotSession.send` accepts four keyword-only kwargs (`attachments`, `mode`, `agent_mode`, `request_headers`), not three. Anchor: b9 `session.py:L1154-L1160`. Test fixture at `tests/fixtures/sdk_mocks.py:L184-L192` already mirrored this shape; only the contract clause was stale. No production source change.
+  - **1.7** — SDK v1.0.0b9: `SubprocessConfig` removed (b7) — confirmed absent from b9 `copilot/__init__.py:L1-L274` and `copilot/client.py:L100-L115`; `CopilotClient.__init__` is keyword-only (b9 `client.py:L1051-L1067`); `PermissionRequestResult` is the type alias `PermissionDecision | PermissionNoResult` (b9 `session.py:L270`); permission-denial uses `PermissionDecisionReject()` imported from `copilot.generated.rpc` (b9 `session.py:L29-L57` imports the variant; b9 root `__init__.py:L94, L203` re-exports the alias but not the variants).
   - **1.6** — SDK v1.0.0b4: `ModelBilling.multiplier` is now `float | None = None`; `ModelBilling.from_dict` no longer raises when `multiplier` is absent. Fresh installs and the model-discovery / configure-wizard paths (`amplifier init`, `amplifier provider models`, `provider edit`) were hard-broken on v0.3.0 once GitHub stopped emitting `multiplier`. The `complete()` runtime path was unaffected. New regression tests under `SDKSurface:MUST:7` pin the tolerance so any future SDK re-tightening fails loudly here.
   - **1.5** — `SessionHandle` reframed as a façade delegating `on`/`send`/`abort` to a private `_raw_session`; lifecycle (`connect`/`disconnect`/`destroy`) owned by `client.session()` (`sdk_adapter/client.py`). Four normative bullets registered as `Types:MUST:4..7` covering `_raw_session` privacy, narrow surface, no lifecycle on handle, and construction-time `session_id` capture. Anchor IDs `:1..:3` unchanged.
   - **1.4** — SDK v0.3.0: `PermissionRequestResult` fields `rules`/`feedback`/`message`/`path` removed; kind literals renamed (`denied-by-rules` → `reject`, etc.). Fallback chains collapsed to direct imports (`copilot` for SubprocessConfig, `copilot.session` for PermissionRequestResult). `make_permission_denied()` factory added to `_imports.py`; `client.py` now expresses intent only.
@@ -32,8 +36,9 @@ This contract ensures the provider remains testable, maintainable, and isolated 
 3. **MUST NOT** allow SDK imports in ANY module outside `sdk_adapter/`
 4. **MUST NOT** export SDK types from `sdk_adapter/__init__.py`
 5. **MUST** fail at import time with a clear error if `github-copilot-sdk` is not installed (eager dependency check)
-6. **MUST** use direct imports for the currently pinned SDK version. Multi-level fallback chains are only needed when supporting a version range that spans a breaking import reorganisation. With `==1.0.0b4`, the canonical locations are: `CopilotClient` and `SubprocessConfig` from `copilot` root (defined in `copilot.client`, re-exported at root); `PermissionRequestResult` from `copilot.session`. `ReasoningEffort` and `PermissionRequestResultKind` are not directly imported by the provider — they are exercised via string-literal `kind=` arguments. If an import moves in a future version, update the pin AND the import together.
-7. **MUST** encapsulate SDK constructor calls — including field names and Literal values — inside `_imports.py`. Other modules call factories (e.g., `make_permission_denied()`), not SDK constructors directly.
+6. **MUST** use direct imports for the currently pinned SDK version. Multi-level fallback chains are only needed when supporting a version range that spans a breaking import reorganisation. With `==1.0.0b10`, the canonical locations are: `CopilotClient` from `copilot` root (defined in `copilot.client`, re-exported at root, keyword-only `__init__` per `SDKSurface:MUST:8`); `ModelLimitsOverride` and `ModelCapabilitiesOverride` from `copilot` root; `PermissionRequestResult` from `copilot.session` (type alias `PermissionDecision | PermissionNoResult` — NOT a constructor); `PermissionDecisionReject` from `copilot.generated.rpc` (carve-out: variants of `PermissionDecision` are not re-exported at `copilot` root, so the membrane imports the variant directly from its canonical generated location per `copilot/generated/rpc.py:10054-10060`). If an import moves in a future version, update the pin AND the import together.
+7. **MUST** permit imports from `copilot.generated.*` ONLY inside `sdk_adapter/_imports.py` AND ONLY for variant classes that the SDK does not re-export at the `copilot` package root (currently: `PermissionDecisionReject`). Each such import MUST be tagged with a `# TODO(owner YYYY):` or `# HACK(<url>):` marker citing the upstream re-export gap so the membrane debt is visible.
+8. **MUST** encapsulate SDK constructor calls — including field names and Literal values — inside `_imports.py`. Other modules call factories (e.g., `make_permission_denied()`), not SDK constructors directly.
 
 ### SDK Version History (Import Changes)
 
@@ -53,12 +58,12 @@ This contract ensures the provider remains testable, maintainable, and isolated 
 
 `copilot/types.py` was removed. Types redistributed to semantically owning modules:
 
-| Type | v0.2.0 location | v0.2.1+ location | Re-exported from root? |
-|------|-----------------|------------------|------------------------|
-| `PermissionRequestResult` | `copilot.types` | `copilot.session` | No |
-| `PermissionHandler` | `copilot.types` | `copilot.session` | No |
-| `SubprocessConfig` | `copilot.types` | `copilot.client` | **Yes** — `copilot.SubprocessConfig` works |
-| Tool types | `copilot.types` | `copilot.tools` | Yes |
+| Type | v0.2.0 location | v0.2.1-b6 location | b10 status |
+|------|-----------------|---------------------|------------|
+| `PermissionRequestResult` | `copilot.types` | `copilot.session` | Type alias in `copilot.session` |
+| `PermissionHandler` | `copilot.types` | `copilot.session` | `copilot.session` |
+| `SubprocessConfig` | `copilot.types` | `copilot.client` | Removed in b7 |
+| Tool types | `copilot.types` | `copilot.tools` | `copilot.tools` |
 
 ### Directory Structure
 
@@ -449,6 +454,15 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | sdk-boundary:MinimalMode:MUST:4 | `skill_directories` MUST be set to `[]` | Explicit empty — Amplifier has its own skills system |
 | sdk-boundary:MinimalMode:MUST:5 | `custom_agents` MUST be set to `[]` | Explicit empty — Amplifier orchestrates agents |
 | sdk-boundary:MinimalMode:MUST:6 | `commands` MUST be set to `[]` | Explicit empty — Amplifier handles slash commands |
+| sdk-boundary:MinimalMode:MUST:7 | `enable_session_store` MUST be set to `False` | Disables SDK cross-session persistent store — ephemeral per-`complete()` sessions (deny-destroy contract). Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at b10 `_mode.py`. |
+| sdk-boundary:MinimalMode:MUST:8 | `enable_skills` MUST be set to `False` | Disables SDK skills loader — Amplifier has its own skills system. Stronger than `skill_directories=[]` (MUST:4); pinned for the same reason. |
+| sdk-boundary:MinimalMode:MUST:9 | `enable_file_hooks` MUST be set to `False` | Disables SDK file-hook discovery (AGENTS.md walkers) — Amplifier registers a single deny-all hook explicitly. |
+| sdk-boundary:MinimalMode:MUST:10 | `enable_host_git_operations` MUST be set to `False` | Disables SDK host-git delegation — Amplifier never delegates git to the SDK; deny-hook already blocks every tool. |
+| sdk-boundary:MinimalMode:MUST:11 | `enable_on_demand_instruction_discovery` MUST be set to `False` | Disables SDK on-demand instruction scans — additional scan suppression complementing `enable_config_discovery=False` (MUST:2). |
+| sdk-boundary:MinimalMode:MUST:12 | `skip_embedding_retrieval` MUST be set to `True` | Disables SDK embedding-based workspace retrieval — Amplifier owns retrieval/context. Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at b10 `_mode.py:193-198`. |
+| sdk-boundary:MinimalMode:MUST:13 | `embedding_cache_storage` MUST be set to `"in-memory"` | Prevents persistent disk cache of workspace embeddings — aligns with deny-destroy / ephemeral session. Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at b10 `_mode.py:201-208`. |
+| sdk-boundary:MinimalMode:MUST:14 | `enable_session_telemetry` MUST be set to `False` | Disables SDK-internal session telemetry — Amplifier owns observability. Pinned because b10 `client.py:1651-1656` documents telemetry as ON-by-default for GitHub-authenticated sessions and our `COPILOT_AGENT_TOKEN` path IS that path; without pin, leaving kwarg `None` lets the bundled CLI emit telemetry by default. |
+| sdk-boundary:MinimalMode:MUST:15 | `mcp_oauth_token_storage` MUST be set to `"in-memory"` | Keeps MCP OAuth tokens in RAM — no on-disk token residue across the ephemeral session boundary. Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at b10 `_mode.py:251-258`; the wire-emit (b10 `client.py:1863-1865`) is INDEPENDENT of the `mcpServers` emit (`client.py:1860-1861`), so `mcp_servers={}` (MUST:3) does NOT foreclose it. |
 
 ### Test Anchors
 
@@ -460,6 +474,40 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | `sdk-boundary:MinimalMode:MUST:4` | skill_directories empty | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_skill_directories_empty` |
 | `sdk-boundary:MinimalMode:MUST:5` | custom_agents empty | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_custom_agents_empty` |
 | `sdk-boundary:MinimalMode:MUST:6` | commands empty | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_commands_empty` |
+| `sdk-boundary:MinimalMode:MUST:7` | enable_session_store disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_enable_session_store_disabled` |
+| `sdk-boundary:MinimalMode:MUST:8` | enable_skills disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_enable_skills_disabled` |
+| `sdk-boundary:MinimalMode:MUST:9` | enable_file_hooks disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_enable_file_hooks_disabled` |
+| `sdk-boundary:MinimalMode:MUST:10` | enable_host_git_operations disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_enable_host_git_operations_disabled` |
+| `sdk-boundary:MinimalMode:MUST:11` | enable_on_demand_instruction_discovery disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_enable_on_demand_instruction_discovery_disabled` |
+| `sdk-boundary:MinimalMode:MUST:12` | embedding retrieval skipped | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_embedding_retrieval_skipped` |
+| `sdk-boundary:MinimalMode:MUST:13` | embedding cache in-memory | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_embedding_cache_storage_in_memory` |
+| `sdk-boundary:MinimalMode:MUST:14` | session telemetry disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_enable_session_telemetry_disabled` |
+| `sdk-boundary:MinimalMode:MUST:15` | mcp oauth token storage in-memory | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_mcp_oauth_token_storage_in_memory` |
+
+### Out of scope (mode-gated defaults not pinned)
+
+The 9 pins above cover every SDK mode-gated capability default reached through
+`create_session` — the `_<kwarg>_default(mode, supplied)` helpers in b10
+`_mode.py:185-258`. Two related SDK defaults are deliberately NOT pinned:
+
+- **`manage_schedule_enabled` / `coauthor_enabled`** — these ARE
+  `create_session` kwargs (b10 `client.py:1576-1577`) but have no
+  `_<kwarg>_default(mode, supplied)` mode-gated helper in `_mode.py:185-258`.
+  They flow through `_post_create_options_patch` (b10 `_mode.py:261-298`),
+  applied internally by `create_session` via `_apply_post_create_options_patch`
+  (b10 `client.py:2099`). The provider passes neither, so both default to
+  `None`; under `mode="copilot-cli"` the patch builder returns `None`
+  (`_mode.py:298`, `return patch or None`) and `session.options.update` is
+  never called — neither option reaches the wire. `coauthor_enabled` is
+  additionally neutralized by MUST:10 (`enable_host_git_operations=False`).
+  Pinning either to `False` would add an `options.update` round-trip the
+  provider does not currently make; tracked as a follow-up if the provider
+  adopts that path.
+- **`mcp_oauth_token_storage` on `resume_session`** — `resume_session`
+  (b10 `client.py:2117`) carries the same independent emit at
+  `client.py:2429-2431`, but the provider creates sessions only via
+  `create_session`; the resume path is unused. If the provider ever resumes
+  sessions, MUST:15 must be extended to that call site.
 
 ---
 
@@ -477,25 +525,27 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 
 | Anchor | Clause |
 |--------|--------|
-| `sdk-boundary:ImportQuarantine:MUST:6` | Direct imports for pinned SDK version — no fallback chains (`CopilotClient` and `SubprocessConfig` from `copilot` root [defined in `copilot.client`, re-exported at root]; `PermissionRequestResult` from `copilot.session`). `ReasoningEffort` and `PermissionRequestResultKind` are not directly imported — they are exercised via string-literal `kind=` arguments. |
-| `sdk-boundary:ImportQuarantine:MUST:7` | SDK constructor calls encapsulated in _imports.py via factory (make_permission_denied); client.py expresses intent only |
+| `sdk-boundary:ImportQuarantine:MUST:6` | Direct imports for pinned SDK version — no fallback chains (`CopilotClient` from `copilot` root [defined in `copilot.client`, re-exported at root, keyword-only `__init__` per `SDKSurface:MUST:8`]; `ModelLimitsOverride` and `ModelCapabilitiesOverride` from `copilot` root; `PermissionRequestResult` from `copilot.session` as a type alias; `PermissionDecisionReject` from `copilot.generated.rpc` because `PermissionDecision` variants are not re-exported at the package root). |
+| `sdk-boundary:ImportQuarantine:MUST:7` | `copilot.generated.*` imports are restricted to `sdk_adapter/_imports.py`, limited to non-root-reexported SDK variant classes, and marked with upstream re-export debt. |
+| `sdk-boundary:ImportQuarantine:MUST:8` | SDK constructor calls encapsulated in _imports.py via factory (make_permission_denied); client.py expresses intent only |
 
-### SDKSurface (v1.0.0b4 shape pins)
+### SDKSurface (v1.0.0b10 shape pins)
 
-These anchors pin specific shapes of the SDK v1.0.0b4 public surface that the
+These anchors pin specific shapes of the SDK v1.0.0b10 public surface that the
 provider's stubs (`typings/copilot/`) and translation code rely on. A test
-under each anchor lives in `tests/test_sdk_assumptions.py` and turns red if
-the live SDK surface drifts.
+under each anchor lives in `tests/test_sdk_assumptions.py::TestSDKImportAssumptions`
+and turns red if the live SDK surface drifts.
 
 | Anchor | Clause |
 |--------|--------|
-| `sdk-boundary:SDKSurface:MUST:1` | `copilot.session.PermissionRequestResultKind` is a Literal of exactly `{"approve-once", "reject", "user-not-available", "no-result"}`; `PermissionRequestResult` carries only `kind` (the v0.2.x fields `rules`, `feedback`, `message`, `path` are absent) |
+| `sdk-boundary:SDKSurface:MUST:1` | `copilot.session.PermissionRequestResult` is the type alias `PermissionDecision \| PermissionNoResult` (b10 `session.py:275`) — NOT a constructor; callers MUST NOT invoke `PermissionRequestResult(kind=...)`. Permission-denial intent is expressed via `copilot.generated.rpc.PermissionDecisionReject()` (b10 `generated/rpc.py:10054`); `kind` is a codegen `ClassVar` and MUST NOT be passed by callers. Default `feedback=None` is omitted from `to_dict()` — equivalent to the previous silent-reject behavior. |
 | `sdk-boundary:SDKSurface:MUST:2` | `copilot.session.ReasoningEffort` is the same object (identity, not just equal) as `copilot.client.ReasoningEffort` |
 | `sdk-boundary:SDKSurface:MUST:3` | `copilot.ModelSupportsOverride` is a dataclass with field tuple `("vision", "reasoning_effort")`, all defaults `None` |
 | `sdk-boundary:SDKSurface:MUST:4` | `copilot.ModelVisionLimitsOverride` is a dataclass with field tuple `("supported_media_types", "max_prompt_images", "max_prompt_image_size")`, all defaults `None` |
 | `sdk-boundary:SDKSurface:MUST:5` | `copilot.session.CopilotSession.workspace_path` is a `functools.cached_property` |
-| `sdk-boundary:SDKSurface:MUST:6` | `copilot.session.CopilotSession.send` accepts exactly the kwargs `{"prompt", "attachments", "mode", "request_headers"}` (positional `prompt`, three keyword-only) so the test mock signature in `tests/fixtures/sdk_mocks.py` and the provider call sites in `sdk_adapter/client.py` stay synchronised with the live SDK |
+| `sdk-boundary:SDKSurface:MUST:6` | `copilot.session.CopilotSession.send` accepts exactly the kwargs `{"prompt", "attachments", "mode", "agent_mode", "request_headers", "display_prompt"}` (positional `prompt`, five keyword-only: `attachments`, `mode`, `agent_mode`, `request_headers`, `display_prompt`) per b10 `session.py:L1185-L1194`, so the test mock signature in `tests/fixtures/sdk_mocks.py` and the provider call sites in `sdk_adapter/client.py` stay synchronised with the live SDK. `agent_mode` is the `Literal["interactive", "plan", "autopilot", "shell"] | None` UI-mode kwarg added in b9; `display_prompt` is the `str | None` UI-display-only kwarg added in b10 (lets callers send a separate display string from the actual prompt). |
 | `sdk-boundary:SDKSurface:MUST:7` | `copilot.client.ModelBilling.from_dict` tolerates the live GitHub server shape — a payload with `restricted_to` and `token_prices` but no `multiplier` — without raising. `multiplier` MUST remain optional (`float \| None`, no invented default), so `list_models()` does not abort the whole batch on the first billing-carrying model. |
+| `sdk-boundary:SDKSurface:MUST:8` | `copilot.CopilotClient.__init__` is keyword-only and accepts at least the keywords `{connection, working_directory, log_level, env, github_token, base_directory, use_logged_in_user, telemetry, session_fs, session_idle_timeout_seconds, enable_remote_sessions, on_list_models, mode}` (b10 `client.py:1073-1089`). An introspection test in `tests/test_sdk_assumptions.py::TestSDKImportAssumptions` MUST fail loudly on drift. |
 
 ### Types
 
@@ -546,15 +596,15 @@ the live SDK surface drifts.
 | `sdk-boundary:ModelDiscovery:MUST:3` | Translates CopilotModelInfo → amplifier_core.ModelInfo |
 | `sdk-boundary:ModelDiscovery:MUST_NOT:1` | No hardcoded model lists |
 
-### SDK API Assumptions (SDK v1.0.0b4)
+### SDK API Assumptions (SDK v1.0.0b10)
 
 | Anchor | Clause |
 |--------|--------|
 | `sdk-boundary:Session:MUST:1` | SDK CopilotClient.create_session() accepts kwargs (model=, streaming=, on_permission_request=, hooks=) |
 | `sdk-boundary:Lifecycle:MUST:1` | SDK CopilotClient has async start() and stop() lifecycle methods |
-| `sdk-boundary:Auth:MUST:1` | SDK CopilotClient accepts SubprocessConfig(github_token=...) |
+| `sdk-boundary:Auth:MUST:1` | SDK CopilotClient accepts `github_token` as a keyword-only constructor argument (b10 `client.py:1073-1089`, wired to `COPILOT_SDK_AUTH_TOKEN` env at `client.py:3189`). |
 | `sdk-boundary:Auth:MUST:2` | Token resolution follows SDK priority order; empty string treated as absent |
-| `sdk-boundary:Auth:MUST:3` | Fail closed (ConfigurationError) when explicit token resolved but SubprocessConfig unavailable |
+| `sdk-boundary:Auth:MUST:3` | An explicitly-resolved token MUST be passed as the `github_token` kwarg to CopilotClient. b10 keeps the direct-kwarg surface (no intermediate config object that could silently drop the token); the only residual fail-closed sentinel is the test-mode case where CopilotClient itself is unavailable (`SKIP_SDK_CHECK` + pytest), which raises ConfigurationError to prevent silent fall-through to ambient auth. |
 | `sdk-boundary:Events:MUST:1` | Provider uses session.on() + session.send(prompt, attachments=...) pattern |
 | `sdk-boundary:Send:MUST:1` | session.send(prompt: str, attachments=...) replaces send({"prompt":...}) |
 | `sdk-boundary:Models:MUST:1` | SDK CopilotClient.list_models() returns list[ModelInfo] |
@@ -721,7 +771,7 @@ The provider MUST resolve auth tokens from environment variables in the official
 1. **MUST** scan environment variables in this exact order: `COPILOT_AGENT_TOKEN`, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`
 2. **MUST** treat an empty string token as absent — resolution MUST continue to the next candidate
 3. **MUST** return `None` when no non-empty token is found in any variable
-4. **MUST** raise `ConfigurationError` (fail closed) when a token is resolved but `SubprocessConfig` is unavailable
+4. **MUST** pass an explicitly-resolved token as the `github_token` kwarg to `CopilotClient`
 5. **MUST NOT** silently ignore an explicit token under any circumstance, including when `SKIP_SDK_CHECK` is set
 6. **MUST NOT** fall through to default/ambient SDK authentication when an explicit token is present but cannot be applied
 
@@ -729,15 +779,15 @@ The provider MUST resolve auth tokens from environment variables in the official
 
 - **Priority order**: Agent-mode tokens (`COPILOT_AGENT_TOKEN`) take highest precedence; GitHub Actions tokens (`GITHUB_TOKEN`) are lowest. This matches the SDK's documented auth hierarchy.
 - **Empty-string fallthrough**: Prevents treating declared-but-empty env vars as valid tokens.
-- **Fail closed**: An explicit token that cannot be applied indicates an SDK version mismatch. Continuing with ambient auth would silently escalate privileges via an unexpected authentication context (OWASP A07: Identification and Authentication Failures).
+- **Direct token wiring**: b10 passes `github_token` directly to `CopilotClient` and then to `COPILOT_SDK_AUTH_TOKEN` (`client.py:3189`). The security guarantee is structural: there is no intermediate config object that can be absent while token resolution succeeds.
 
 ### Test Anchors
 
 | Anchor | Clause |
 |--------|--------|
-| `sdk-boundary:Auth:MUST:1` | SDK CopilotClient accepts SubprocessConfig(github_token=...) |
+| `sdk-boundary:Auth:MUST:1` | SDK CopilotClient accepts `github_token` as a keyword-only constructor argument (b10 `client.py:1073-1089`, wired to `COPILOT_SDK_AUTH_TOKEN` env at `client.py:3189`). |
 | `sdk-boundary:Auth:MUST:2` | Token resolution follows SDK priority order; empty string treated as absent |
-| `sdk-boundary:Auth:MUST:3` | Fail closed (ConfigurationError) when explicit token resolved but SubprocessConfig unavailable |
+| `sdk-boundary:Auth:MUST:3` | An explicitly-resolved token MUST be passed as the `github_token` kwarg to CopilotClient. b10 keeps the direct-kwarg surface (no intermediate config object that could silently drop the token); the only residual fail-closed sentinel is the test-mode case where CopilotClient itself is unavailable (`SKIP_SDK_CHECK` + pytest), which raises ConfigurationError to prevent silent fall-through to ambient auth. |
 
 ---
 

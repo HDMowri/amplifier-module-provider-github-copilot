@@ -127,7 +127,9 @@ class TestRetryWithEventualSuccess:
                 *,
                 attachments: list[dict[str, Any]] | None = None,
                 mode: object | None = None,
+                agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
+                display_prompt: str | None = None,
             ) -> str:
                 nonlocal attempt_count
                 attempt_count += 1
@@ -184,7 +186,9 @@ class TestRetryWithEventualSuccess:
                 *,
                 attachments: list[dict[str, Any]] | None = None,
                 mode: object | None = None,
+                agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
+                display_prompt: str | None = None,
             ) -> str:
                 nonlocal attempt_count
                 attempt_count += 1
@@ -666,7 +670,9 @@ class TestQueueFullHandling:
                 *,
                 attachments: list[dict[str, Any]] | None = None,
                 mode: object | None = None,
+                agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
+                display_prompt: str | None = None,
             ) -> str:
                 self.last_prompt = prompt
                 for event in flood_events:
@@ -732,7 +738,9 @@ class TestFakeToolDetectionRetry:
                 *,
                 attachments: list[dict[str, Any]] | None = None,
                 mode: object | None = None,
+                agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
+                display_prompt: str | None = None,
             ) -> str:
                 nonlocal correction_attempt
                 correction_attempt += 1
@@ -797,7 +805,9 @@ class TestFakeToolDetectionRetry:
                 *,
                 attachments: list[dict[str, Any]] | None = None,
                 mode: object | None = None,
+                agent_mode: object | None = None,
                 request_headers: dict[str, str] | None = None,
+                display_prompt: str | None = None,
             ) -> str:
                 nonlocal attempt
                 attempt += 1

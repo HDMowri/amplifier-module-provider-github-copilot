@@ -8,8 +8,7 @@ Tests verify:
 - Original exception is still propagated
 - Retry after failure succeeds
 
-Note: These tests mock SubprocessConfig as non-None to avoid triggering
-the P1-6 security fix (fail-closed when token cannot be applied).
+Note: These tests pin the b10 CopilotClient keyword-argument constructor.
 """
 
 from __future__ import annotations
@@ -18,23 +17,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-
-# Mock SubprocessConfig that accepts github_token
-class MockSubprocessConfig:
-    """Mock SubprocessConfig that accepts github_token."""
-
-    def __init__(
-        self,
-        github_token: str | None = None,
-        log_level: str = "info",
-        copilot_home: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> None:
-        self.github_token = github_token
-        self.log_level = log_level
-        self.copilot_home = copilot_home
-        self.env = env
 
 
 class _MockSDKSession:
@@ -76,21 +58,25 @@ class TestFailedStartCleanup:
         wrapper = CopilotClientWrapper()
 
         # Mock CopilotClient to raise on start()
-        mock_client_class = MagicMock()
         mock_client_instance = MagicMock(spec=_MockSDKClient)
         mock_client_instance.start = AsyncMock(side_effect=RuntimeError("Start failed"))
-        mock_client_class.return_value = mock_client_instance
+
+        def construct_client(
+            *,
+            base_directory: str,
+            github_token: str | None = None,
+            log_level: str = "info",
+            env: dict[str, str],
+            mode: str = "copilot-cli",
+        ) -> MagicMock:
+            return mock_client_instance
 
         with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
-            # Patch where CopilotClient and SubprocessConfig are used
+            # Patch where CopilotClient is used
             with (
                 patch(
                     "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                    mock_client_class,
-                ),
-                patch(
-                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                    MockSubprocessConfig,
+                    construct_client,
                 ),
             ):
                 # RuntimeError from start() is translated to ProviderUnavailableError
@@ -117,7 +103,14 @@ class TestFailedStartCleanup:
 
         call_count = 0
 
-        def create_client(*args: Any, **kwargs: Any) -> MagicMock:
+        def create_client(
+            *,
+            base_directory: str,
+            github_token: str | None = None,
+            log_level: str = "info",
+            env: dict[str, str],
+            mode: str = "copilot-cli",
+        ) -> MagicMock:
             nonlocal call_count
             call_count += 1
             mock_client = MagicMock(spec=_MockSDKClient)
@@ -138,15 +131,11 @@ class TestFailedStartCleanup:
         mock_client_class = MagicMock(side_effect=create_client)
 
         with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
-            # Patch where CopilotClient and SubprocessConfig are used
+            # Patch where CopilotClient is used
             with (
                 patch(
                     "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
                     mock_client_class,
-                ),
-                patch(
-                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                    MockSubprocessConfig,
                 ),
             ):
                 # First attempt: should fail
@@ -179,21 +168,25 @@ class TestFailedStartCleanup:
 
         wrapper = CopilotClientWrapper()
 
-        mock_client_class = MagicMock()
         mock_client_instance = MagicMock(spec=_MockSDKClient)
         mock_client_instance.start = AsyncMock(side_effect=RuntimeError("Connection refused"))
-        mock_client_class.return_value = mock_client_instance
+
+        def construct_client(
+            *,
+            base_directory: str,
+            github_token: str | None = None,
+            log_level: str = "info",
+            env: dict[str, str],
+            mode: str = "copilot-cli",
+        ) -> MagicMock:
+            return mock_client_instance
 
         with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
-            # Patch where CopilotClient and SubprocessConfig are used
+            # Patch where CopilotClient is used
             with (
                 patch(
                     "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                    mock_client_class,
-                ),
-                patch(
-                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                    MockSubprocessConfig,
+                    construct_client,
                 ),
             ):
                 # RuntimeError from start() is translated to ProviderUnavailableError
@@ -222,7 +215,6 @@ class TestFailedStartCleanup:
 
         wrapper = CopilotClientWrapper()
 
-        mock_client_class = MagicMock()
         mock_client_instance = MagicMock(spec=_MockSDKClient)
         mock_client_instance.start = AsyncMock()
         mock_session = MagicMock(spec=_MockSDKSession)
@@ -231,18 +223,27 @@ class TestFailedStartCleanup:
         mock_session.on = MagicMock(return_value=lambda: None)
         mock_session.send = AsyncMock(return_value="message-id")
         mock_client_instance.create_session = AsyncMock(return_value=mock_session)
-        mock_client_class.return_value = mock_client_instance
+
+        construct_count = 0
+
+        def construct_client(
+            *,
+            base_directory: str,
+            github_token: str | None = None,
+            log_level: str = "info",
+            env: dict[str, str],
+            mode: str = "copilot-cli",
+        ) -> MagicMock:
+            nonlocal construct_count
+            construct_count += 1
+            return mock_client_instance
 
         with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
-            # Patch where CopilotClient and SubprocessConfig are used
+            # Patch where CopilotClient is used
             with (
                 patch(
                     "amplifier_module_provider_github_copilot.sdk_adapter._imports.CopilotClient",
-                    mock_client_class,
-                ),
-                patch(
-                    "amplifier_module_provider_github_copilot.sdk_adapter._imports.SubprocessConfig",
-                    MockSubprocessConfig,
+                    construct_client,
                 ),
             ):
                 async with wrapper.session(model="gpt-4"):
@@ -255,5 +256,11 @@ class TestFailedStartCleanup:
                 async with wrapper.session(model="gpt-4"):
                     pass
 
-                # CopilotClient constructor should only be called once
-                assert mock_client_class.call_count == 1
+                # CopilotClient constructor must be called exactly once across
+                # both sessions — the start.call_count assertion alone would
+                # silently pass if a future refactor returned a fresh mock per
+                # construct call (only the original mock's start would stay 1).
+                assert construct_count == 1, (
+                    "CopilotClient constructor must be called exactly once across both sessions"
+                )
+                assert mock_client_instance.start.call_count == 1

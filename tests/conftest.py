@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests._sdk_version_gate import require_sdk
+
 # P1-6 Security: SKIP_SDK_CHECK is guarded by _is_pytest_running() in production code.
 # This allows tests to run without the SDK while preventing production misuse.
 os.environ["SKIP_SDK_CHECK"] = "1"
@@ -38,7 +40,7 @@ if sys.platform == "win32":
 
 # P1-6 Security Fix: Clear GitHub token env vars for non-live tests.
 # This prevents the fail-closed security behavior from triggering when
-# SubprocessConfig is None (due to SKIP_SDK_CHECK=1) and a token exists.
+# CopilotClient cannot be constructed and a token exists.
 # Live tests (marked with @pytest.mark.live) should preserve their tokens.
 _TOKEN_ENV_VARS = ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
 _saved_tokens: dict[str, str] = {}
@@ -231,29 +233,26 @@ def _get_github_token() -> str | None:
 # -- Fixtures --
 
 
-async def _default_permission_handler(  # pyright: ignore[reportUnusedFunction]
-    permission: Any,
-) -> dict[str, str]:
-    """Default permission handler that denies all permission requests.
-
-    SDK ASSUMPTION: The SDK requires on_permission_request handler when creating
-    sessions. Without it, create_session() raises ValueError.
-    """
-    return {"permissionDecision": "deny", "permissionDecisionReason": "test environment"}
-
-
 @pytest.fixture(scope="function")
-async def sdk_client() -> AsyncIterator[Any]:
+async def sdk_client(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator[Any]:
     """Function-scoped real SDK client for live tests.
 
     Fails if SDK not installed or no token available.
     Policy: Tests run and fail, never skip.
 
-    SDK v0.2.0: Uses SubprocessConfig instead of options dict.
+    SDK v1.0.0b10: uses direct CopilotClient keyword arguments.
     on_permission_request moves to create_session().
+
+    Parity with production wiring (sdk_adapter/client.py):
+      * env is built via scrub_sdk_env() so COPILOT_HOME / COPILOT_CLI_PATH
+        cannot leak from the ambient shell into the SDK subprocess.
+      * base_directory is an isolated tmp_path_factory directory per test
+        — no cwd-relative shared state across runs or concurrent pytest
+        invocations.
     """
-    copilot = pytest.importorskip("copilot", reason="github-copilot-sdk not installed")
-    from copilot.client import SubprocessConfig  # type: ignore[import-not-found]
+    from amplifier_module_provider_github_copilot.sdk_adapter.client import scrub_sdk_env
+
+    copilot = require_sdk()
 
     token = _get_github_token()
     if not token:
@@ -262,9 +261,13 @@ async def sdk_client() -> AsyncIterator[Any]:
             "Policy: tests run and fail, never skip."
         )
 
-    # SDK v0.2.0: SubprocessConfig replaces options dict
-    config = SubprocessConfig(github_token=token)
-    client = copilot.CopilotClient(config)
+    client = copilot.CopilotClient(
+        base_directory=str(tmp_path_factory.mktemp("copilot-home")),
+        github_token=token,
+        log_level="info",
+        env=scrub_sdk_env(dict(os.environ)),
+        mode="copilot-cli",
+    )
     await client.start()
     yield client
     await client.stop()
@@ -272,11 +275,12 @@ async def sdk_client() -> AsyncIterator[Any]:
 
 @pytest.fixture(scope="module")
 def sdk_module() -> Any:
-    """Import the copilot module, skip if not available.
+    """Import the copilot module, fail if not available or wrong version.
 
     Use this for Tier 6 tests that need SDK types but not a running client.
+    Policy: Tests run and fail, never skip.
     """
-    return pytest.importorskip("copilot", reason="github-copilot-sdk not installed")
+    return require_sdk()
 
 
 @pytest.fixture(autouse=True)
@@ -286,7 +290,7 @@ def _auto_restore_tokens_for_live_tests(  # pyright: ignore[reportUnusedFunction
     """Automatically restore tokens for @pytest.mark.live tests.
 
     P1-6 Security Fix: GitHub tokens are cleared at conftest import to prevent
-    unit tests from accidentally using real credentials when SubprocessConfig=None.
+    unit tests from accidentally using real credentials when client init fails closed.
     Live tests that need real credentials get tokens restored automatically.
     """
     # Check if test is marked as "live"

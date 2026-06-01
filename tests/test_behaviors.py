@@ -415,6 +415,75 @@ class TestSdkVersionConsistency:
         )
 
 
+class TestSdkVersionFloorMatchesSymbolRequirements:
+    """Guard must reject versions that lack symbols the adapter calls.
+
+    Contract: sdk-boundary:Membrane:MUST:5
+
+    The adapter calls ``CopilotClient(base_directory=..., mode="copilot-cli", ...)``
+    in ``sdk_adapter/client.py`` plus the 9 new MinimalMode kwargs
+    (``enable_session_store``, ``enable_skills``, ``enable_file_hooks``,
+    ``enable_host_git_operations``, ``enable_on_demand_instruction_discovery``,
+    ``skip_embedding_retrieval``, ``embedding_cache_storage``,
+    ``enable_session_telemetry``, ``mcp_oauth_token_storage``) added at b10
+    (verified against SDK b10 ``client.py:1573-1605``). Any SDK older than b10
+    fails at first ``create_session(...)`` with
+    ``TypeError: unexpected keyword argument``.
+    The runtime guard must reject those versions at import time so users
+    get the actionable reinstall message instead of a deferred ``TypeError``.
+    """
+
+    def test_rejects_pre_b9_one_x_versions(self) -> None:
+        """sdk-boundary:Membrane:MUST:5 — b4–b9 must NOT pass the guard.
+
+        These versions lack at least one of the b10 MinimalMode MUST:7-15
+        kwargs the adapter passes unconditionally to ``create_session``.
+        """
+        from amplifier_module_provider_github_copilot import (
+            _check_sdk_version,  # type: ignore[reportPrivateUsage]
+        )
+
+        for stale in ("1.0.0b4", "1.0.0b5", "1.0.0b6", "1.0.0b7", "1.0.0b8", "1.0.0b9"):
+            with pytest.raises(ImportError) as exc_info:
+                _check_sdk_version(stale)
+            msg = str(exc_info.value)
+            assert stale in msg, f"Error must echo installed version {stale!r}"
+            assert "1.0.0b10" in msg, "Error must state the pinned target version"
+
+    def test_accepts_b10_and_above(self) -> None:
+        """sdk-boundary:Membrane:MUST:5 — b10 and forward all satisfy the floor.
+
+        b10 is the lower bound (introduction of MinimalMode MUST:7-15 kwargs)
+        and also the pyproject pin; final 1.0.0 (post-beta) and onward must pass.
+        """
+        from amplifier_module_provider_github_copilot import (
+            _check_sdk_version,  # type: ignore[reportPrivateUsage]
+        )
+
+        for ok in ("1.0.0b10", "1.0.0", "1.0.1", "1.1.0", "2.0.0"):
+            _check_sdk_version(ok)  # must not raise
+
+    def test_message_format_invariants_preserved(self) -> None:
+        """Pre-existing message anchors survive the floor tightening.
+
+        Two downstream tests pin specific substrings:
+        ``test_entry_point.py::test_version_check_error_message_is_actionable``
+        and ``test_behaviors.py::test_sdk_version_error_message_matches_metadata``.
+        Re-asserting the contract locally guards against future refactors
+        that satisfy this class but break those.
+        """
+        from amplifier_module_provider_github_copilot import (
+            _check_sdk_version,  # type: ignore[reportPrivateUsage]
+        )
+
+        with pytest.raises(ImportError) as exc_info:
+            _check_sdk_version("1.0.0b6")
+        msg = str(exc_info.value)
+        assert "github-copilot-sdk" in msg
+        assert "pip install 'github-copilot-sdk==1.0.0b10'" in msg
+        assert "amplifier provider install" in msg
+
+
 class TestPackageVersionConsistency:
     """Verify package __version__ matches pyproject.toml version.
 

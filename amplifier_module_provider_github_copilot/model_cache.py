@@ -218,11 +218,9 @@ def read_cache(
     age = time.time() - timestamp
 
     if age > max_age_seconds:
-        # Schneier amendment: log nominal TTL, not the jittered effective
-        # max — keeps process-level RNG entropy out of debug output.
-        logger.debug(
-            "Cache stale: age=%.0f seconds, nominal_ttl=%d", age, nominal_ttl
-        )
+        # Log nominal TTL, not the jittered effective max — keeps
+        # process-level RNG entropy out of debug output.
+        logger.debug("Cache stale: age=%.0f seconds, nominal_ttl=%d", age, nominal_ttl)
         return None
 
     # Parse models per-entry: preserves valid entries even when some are malformed.

@@ -342,7 +342,11 @@ class TestCachePolicy:
         }
         fresh_file = tmp_path / "fresh.json"
         fresh_file.write_text(json.dumps(fresh_data), encoding="utf-8")
-        assert read_cache(fresh_file) is not None
+        fresh_result = read_cache(fresh_file)
+        assert isinstance(fresh_result, list) and len(fresh_result) == 1, (
+            "Item inside jittered TTL window MUST return a one-element model list"
+        )
+        assert fresh_result[0].id == "m"
 
         # Item two seconds outside the jittered window: stale.
         stale_data = dict(fresh_data)

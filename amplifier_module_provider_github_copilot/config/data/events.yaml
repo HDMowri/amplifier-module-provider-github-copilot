@@ -133,6 +133,29 @@ event_classifications:
     # this enum member duplicates that signal at a lower granularity. Dropped
     # to avoid double-emitting ERROR events from the same failure.
     - model.call_failure
+    # SDK v1.0.0b9 — autopilot objective state-file CRUD telemetry. Amplifier
+    # does not host the autopilot objectives UI; no domain mapping exists.
+    - session.autopilot_objective_changed
+    # SDK v1.0.0b9 — aggregate allow-all permissions transition. Provider
+    # surfaces permission decisions through the PermissionHandler contract,
+    # not by forwarding raw session-wide toggle events. The pre-existing
+    # `permission.*` wildcard does not match this `session.` prefix, so an
+    # explicit entry is required.
+    - session.permissions_changed
+    # SDK v1.0.0b9 — opaque source-defined notification envelope (payload
+    # semantics are not defined by the SDK). With no schema to translate,
+    # there is nothing the provider can map to a kernel domain event.
+    - session.custom_notification
+    # SDK v1.0.0b9 — canvas UI lifecycle and registry mutations. Amplifier
+    # has no canvas surface; same disposition as session.skills_loaded /
+    # session.extensions_loaded above.
+    - session.canvas.opened
+    - session.canvas.registry_changed
+    # SDK v1.0.0b9 — MCP App view's own tool-call telemetry (duration,
+    # server, success). Kernel tool-call signal travels via the
+    # tool.execution_complete bridge; forwarding this would double-emit
+    # under a different schema.
+    - mcp_app.tool_call_complete
 
 finish_reason_map:
   # Values MUST be lowercase to match amplifier-core proto:

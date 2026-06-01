@@ -1,48 +1,99 @@
-"""Type stubs for ``copilot.session`` submodule (SDK v0.3.0).
+"""Type stubs for ``copilot.session`` submodule (SDK v1.0.0b10).
 
-Provider imports ``PermissionRequestResult`` and ``PermissionRequestResultKind``
-from here; ``ReasoningEffort`` is also re-exported at this path by the live
-SDK (verified via ``dir(copilot.session)`` 2026-05-12) so the stub mirrors
-that surface for downstream consumers that prefer the session-module import.
+The provider imports ``PermissionRequestResult`` from this module via the
+quarantined ``sdk_adapter`` membrane. ``ReasoningEffort`` is also re-exported
+from ``copilot.session`` by the live SDK (the same Literal object as
+``copilot.client.ReasoningEffort``), so the stub mirrors that surface for
+downstream consumers that prefer the session-module import path.
 
-Shape verified against the live SDK v0.3.0 source on 2026-05-12:
+Shape verified against the live SDK v1.0.0b10 source:
 
-* ``PermissionRequestResultKind`` is a Literal of four kinds.
-* ``PermissionRequestResult`` is a ``@dataclass`` with a single positional
-  field ``kind`` defaulting to ``"user-not-available"``. There is NO
-  ``**kwargs`` in the real ``__init__``; declaring one would be more
-  permissive than the SDK and mask call-site errors at the boundary.
-* ``ReasoningEffort`` is a ``Literal["low","medium","high","xhigh"]``
+* ``PermissionRequestResult`` is the type alias ``PermissionDecision |
+  PermissionNoResult`` (b10 ``session.py:L275``). It is NOT a constructor;
+  declaring it as a dataclass would be a typing lie and would mask call-site
+  errors at the boundary. Construct denial via ``PermissionDecisionReject()``
+  from ``copilot.generated.rpc``.
+* ``PermissionNoResult`` is a dataclass sentinel with a literal ``kind``
+  discriminator (b10 ``session.py:L257``).
+* ``ReasoningEffort`` is ``Literal["low","medium","high","xhigh"]``
   re-exported from ``copilot.session`` and ``copilot.client``.
 """
 
-from dataclasses import dataclass
-from typing import Literal
+from collections.abc import Callable
+from typing import Any, Literal, TypeAlias
 
-PermissionRequestResultKind = Literal[
-    "approve-once",
-    "reject",
-    "user-not-available",
-    "no-result",
-]
+# from b10 session.py:L43 — PermissionDecision is the codegen discriminated
+# union of variant classes (Approve*, Reject, UserNotAvailable). The provider
+# never inspects its internals, so the stub treats it as an opaque class.
+class PermissionDecision:
+    kind: str
 
 
-@dataclass
-class PermissionRequestResult:
-    """SDK v0.3.0 permission-request reply object.
+class PermissionNoResult:
+    """Sentinel returned by a permission handler to leave a request unanswered."""
 
-    Constructed by the provider as ``PermissionRequestResult(kind="reject")``
-    or with the default ``user-not-available`` value.
-    """
+    kind: Literal["no-result"]
 
-    kind: PermissionRequestResultKind = "user-not-available"
+    # b10 ``session.py:L256-L266`` declares PermissionNoResult as @dataclass
+    # with a single defaulted field, so the implicit __init__ accepts ``kind``
+    # both positionally and as a keyword. The stub mirrors that.
+    def __init__(self, kind: Literal["no-result"] = "no-result") -> None: ...
+
+
+PermissionRequestResult: TypeAlias = PermissionDecision | PermissionNoResult
 
 
 ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
 
 
+# from b10 session.py:L1066 — CopilotSession is the streaming session created
+# by ``CopilotClient.create_session``. Canonical home is ``copilot.session``;
+# ``copilot/__init__.pyi`` re-exports it for the root import path.
+class CopilotSession:
+    """Streaming session created by ``CopilotClient.create_session``."""
+
+    session_id: str
+
+    # Real SDK declares ``workspace_path`` as ``functools.cached_property``;
+    # the stub renders it as a read-only property to forbid spurious assignment.
+    @property
+    def workspace_path(self) -> Any: ...
+    def on(
+        self, handler: Callable[[Any], None]
+    ) -> Callable[[], None]: ...
+    # from b10 session.py:L1185-L1194 — five keyword-only kwargs (display_prompt
+    # added in b10; SDKSurface:MUST:6 pins the full set).
+    async def send(
+        self,
+        prompt: str,
+        *,
+        attachments: list[Any] | None = None,
+        mode: Any | None = None,
+        agent_mode: Any | None = None,
+        request_headers: dict[str, str] | None = None,
+        display_prompt: str | None = None,
+    ) -> str: ...
+    async def send_and_wait(
+        self,
+        prompt: str,
+        *,
+        attachments: list[Any] | None = None,
+        mode: Any | None = None,
+        agent_mode: Any | None = None,
+        request_headers: dict[str, str] | None = None,
+        display_prompt: str | None = None,
+        timeout: float = 60.0,
+    ) -> Any: ...
+    async def disconnect(self) -> None: ...
+    async def destroy(self) -> None: ...
+    async def __aenter__(self) -> CopilotSession: ...
+    async def __aexit__(self, *args: Any) -> None: ...
+
+
 __all__ = [
+    "CopilotSession",
+    "PermissionDecision",
+    "PermissionNoResult",
     "PermissionRequestResult",
-    "PermissionRequestResultKind",
     "ReasoningEffort",
 ]

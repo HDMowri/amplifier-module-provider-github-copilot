@@ -1,49 +1,34 @@
-"""Type stubs for copilot.types module.
+"""Type stubs for the ``copilot.types`` namespace shim (SDK v1.0.0b10).
 
-These stubs are pyright-only namespace shims. There is no ``copilot.types``
-module at runtime in SDK v0.3.0+ — runtime imports must go through
+There is no ``copilot.types`` module at runtime in SDK v0.3.0+ — runtime
+imports must go through
 ``amplifier_module_provider_github_copilot.sdk_adapter._imports`` (the
 quarantined SDK boundary). Symbols whose runtime home moved (e.g.,
 ``PermissionRequestResult`` is now in ``copilot.session``) are stubbed in
-their canonical sibling .pyi file, not here.
+their canonical sibling ``.pyi`` file, not here.
 
-Field shapes were verified against the live SDK v0.3.0 source on 2026-05-12:
+Shapes verified against SDK v1.0.0b10 source:
 
-* ``LogLevel`` literals match ``copilot/client.py`` line 72.
-* ``TelemetryConfig`` is a ``TypedDict(total=False)`` carrying OTEL
-  fields (``otlp_endpoint``, ``file_path``, ``exporter_type``,
-  ``source_name``, ``capture_content``) — NOT a dataclass with
-  ``enabled: bool``. Mirrors ``copilot/client.py`` lines 84-96.
-* ``SubprocessConfig`` carries ``session_fs: SessionFsConfig | None`` —
-  see ``copilot/client.py`` line 150. ``SessionFsConfig`` itself is a
-  TypedDict in ``copilot/session_fs_provider.py``; the provider does not
-  construct one, so it is stubbed loosely as ``Any``.
-* ``BlobAttachment`` is a ``TypedDict`` defined in ``copilot.session``
-  with keys ``type``, ``data`` (base64 ``str``), ``mimeType`` (camelCase
-  intentional), and optional ``displayName`` — NOT a dataclass with
-  ``data: bytes``/``media_type: str``.
-* ``ModelInfo`` carries only the fields the real SDK exposes:
-  ``id``, ``name``, ``capabilities`` (nested object, required), ``policy``,
-  ``billing``, ``supported_reasoning_efforts``, ``default_reasoning_effort``.
-  Earlier stub versions invented ``family``/``vendor``/``context_window``/
-  ``max_output_tokens``/``preview``/``is_default`` — those fields belong on
-  ``amplifier_core.ModelInfo`` (kernel-facing) and ``CopilotModelInfo``
-  (internal isolation), NOT on the SDK type.
-* ``ModelPolicy.state`` is ``str`` (real runtime values include
-  ``"enabled"``, ``"disabled"``, ``"unconfigured"`` — see
-  ``copilot/client.py`` lines 477-493) and ``terms`` is required ``str``.
+* ``LogLevel`` literals match b10 ``client.py:L110``.
+* ``TelemetryConfig`` is a ``TypedDict(total=False)`` carrying OTEL fields.
+* ``BlobAttachment`` is a strict ``TypedDict`` defined in b10 ``session.py:L149``;
+  ``type``, ``data``, ``mimeType`` are required, ``displayName`` is ``NotRequired``.
+* ``ModelInfo`` carries fields ``id``, ``name``, ``capabilities``, ``policy``,
+  ``billing``, ``supported_reasoning_efforts``, ``default_reasoning_effort``
+  (b10 ``client.py:L691``).
+* ``ModelPolicy`` fields are required (no defaults) per b10 ``client.py:L645``.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from dataclasses import dataclass
+from typing import Any, Literal, NotRequired, TypedDict
 
 LogLevel = Literal["none", "error", "warning", "info", "debug", "all"]
 
 
 SessionFsConfig = Any
 """Opaque TypedDict from ``copilot.session_fs_provider``. The provider does
-not construct one; this loose typing is enough for pyright to type-check
-``SubprocessConfig`` references."""
+not construct one; loose typing keeps the membrane narrow without losing
+pyright coverage on adjacent imports."""
 
 
 class TelemetryConfig(TypedDict, total=False):
@@ -61,55 +46,28 @@ class TelemetryConfig(TypedDict, total=False):
     capture_content: bool
 
 
-@dataclass
-class SubprocessConfig:
-    """Configuration for SDK subprocess mode.
-
-    Matches real SDK signature from ``copilot/client.py`` lines 100-159.
-    """
-    cli_path: str | None = None
-    cli_args: list[str] = field(default_factory=list)
-    cwd: str | None = None
-    use_stdio: bool = True
-    port: int = 0
-    log_level: LogLevel = "info"
-    env: dict[str, str] | None = None
-    github_token: str | None = None
-    use_logged_in_user: bool | None = None
-    telemetry: TelemetryConfig | None = None
-    session_fs: SessionFsConfig | None = None
-    session_idle_timeout_seconds: int | None = None
-
-
-class BlobAttachment(TypedDict, total=False):
-    """Inline base64-encoded vision/blob attachment.
-
-    Runtime home: ``copilot.session`` (TypedDict, not dataclass).
-    ``mimeType`` is camelCase to match the SDK JSON wire format.
-    """
+# from b10 session.py:L149 — BlobAttachment is a strict TypedDict.
+# ``type``, ``data``, and ``mimeType`` are required; only ``displayName``
+# is NotRequired. ``mimeType`` is camelCase to match the SDK wire format.
+class BlobAttachment(TypedDict):
+    """Inline base64-encoded vision/blob attachment."""
 
     type: Literal["blob"]
     data: str
     mimeType: str
-    displayName: str
-
-
-# NOTE: ``PermissionRequestResult`` and ``PermissionRequestResultKind`` live
-# in ``copilot.session`` at runtime in SDK v0.3.0+. The canonical stub is at
-# ``typings/copilot/session.pyi``. Do NOT re-add a duplicate ``@dataclass``
-# stub here.
+    displayName: NotRequired[str]
 
 
 @dataclass
 class ModelInfo:
-    """Information about an available model (SDK v0.3.0).
+    """Information about an available model (SDK v1.0.0b10).
 
-    Field set mirrors ``copilot/client.py`` lines 523-534 exactly. Note
-    that ``capabilities`` is typed ``Any`` because the real SDK shape is a
-    nested object (``capabilities.limits.max_context_window_tokens``,
+    Field set mirrors b10 ``client.py:L691`` exactly. ``capabilities``
+    is typed ``Any`` because the real SDK shape is a nested object
+    (``capabilities.limits.max_context_window_tokens``,
     ``capabilities.supports.vision``); the provider's translation layer
-    (``sdk_adapter/model_translation.py``) reads it via ``getattr`` and
-    does not depend on a precise type.
+    (``sdk_adapter/model_translation.py``) reads it via ``getattr`` and does
+    not depend on a precise type.
     """
 
     id: str
@@ -123,15 +81,15 @@ class ModelInfo:
 
 @dataclass
 class ModelPolicy:
-    """Policy settings for a model (SDK v0.3.0).
+    """Policy settings for a model.
 
     Real runtime ``state`` values include ``"enabled"``, ``"disabled"``,
-    ``"unconfigured"`` — see ``copilot/client.py`` lines 477-493. ``terms``
-    is non-optional in the SDK.
+    ``"unconfigured"`` — see b10 ``client.py:L645``. Both fields are
+    required positional in the SDK dataclass; no defaults.
     """
 
-    state: str = ""
-    terms: str = ""
+    state: str
+    terms: str
 
 
 __all__ = [
@@ -140,6 +98,5 @@ __all__ = [
     "ModelInfo",
     "ModelPolicy",
     "SessionFsConfig",
-    "SubprocessConfig",
     "TelemetryConfig",
 ]

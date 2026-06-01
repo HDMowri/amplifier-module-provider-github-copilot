@@ -170,11 +170,15 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
         pytest.param("override-empty-falls", "", "fallthrough", id="override-empty-falls"),
         pytest.param("override-ws-falls", "   \t  ", "fallthrough", id="override-ws-falls"),
         pytest.param(
-            "override-relative-raises", "relative/path", "ValueError",
+            "override-relative-raises",
+            "relative/path",
+            "ValueError",
             id="override-relative-raises",
         ),
         pytest.param(
-            "override-tilde-expands", "~/sentinel-tilde", "tilde",
+            "override-tilde-expands",
+            "~/sentinel-tilde",
+            "tilde",
             id="override-tilde-expands",
         ),
     ],
@@ -255,21 +259,16 @@ def test_provider_home_and_cache_home_are_disjoint(clean_env: pytest.MonkeyPatch
 
 # Contract: filesystem-layout:Paths:MUST:3 — adversarial env causing overlap
 @pytest.mark.parametrize(
-    ("provider_env", "xdg_cache_env", "localappdata_env", "shape"),
+    ("provider_parts", "xdg_cache_parts", "localappdata_parts", "shape"),
     [
         # cache_home (XDG_CACHE_HOME/<dist>) nests inside provider_home
-        ("/tmp/v2amp-overlap", "/tmp/v2amp-overlap", None, "nested-cache-under-provider"),
+        (("ov-root",), ("ov-root",), None, "nested-cache-under-provider"),
         # provider_home equals cache_home exactly (override + XDG_CACHE_HOME tail-named dist)
-        (
-            f"/tmp/v2amp-equal/{PROVIDER_DISTRIBUTION_NAME}",
-            "/tmp/v2amp-equal",
-            None,
-            "exactly-equal",
-        ),
+        (("eq-root", PROVIDER_DISTRIBUTION_NAME), ("eq-root",), None, "exactly-equal"),
         # provider_home nests inside cache_home (XDG path is parent of provider override)
         (
-            f"/tmp/v2amp-pin/{PROVIDER_DISTRIBUTION_NAME}/inner",
-            "/tmp/v2amp-pin",
+            ("pin-root", PROVIDER_DISTRIBUTION_NAME, "inner"),
+            ("pin-root",),
             None,
             "provider-under-cache",
         ),
@@ -277,11 +276,12 @@ def test_provider_home_and_cache_home_are_disjoint(clean_env: pytest.MonkeyPatch
     ids=["nested-cache", "exactly-equal", "nested-provider"],
 )
 def test_overlapping_env_raises_value_error(
-    provider_env: str,
-    xdg_cache_env: str,
-    localappdata_env: str | None,
+    provider_parts: tuple[str, ...],
+    xdg_cache_parts: tuple[str, ...],
+    localappdata_parts: tuple[str, ...] | None,
     shape: str,
     clean_env: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Adversarial env producing overlap MUST raise ValueError, not silently
     chmod overlapping subtrees.
@@ -293,12 +293,12 @@ def test_overlapping_env_raises_value_error(
     into a shared subtree — collapsing the data/cache separation
     promised by `Paths:MUST:3`.
     """
-    if sys.platform == "win32":
-        pytest.skip("Adversarial overlap test uses POSIX-style /tmp paths")
-    clean_env.setenv("AMPLIFIER_PROVIDER_GITHUB_COPILOT_HOME", provider_env)
-    clean_env.setenv("XDG_CACHE_HOME", xdg_cache_env)
-    if localappdata_env is not None:
-        clean_env.setenv("LOCALAPPDATA", localappdata_env)
+    provider_home = tmp_path.joinpath(*provider_parts)
+    xdg_cache_home = tmp_path.joinpath(*xdg_cache_parts)
+    clean_env.setenv("AMPLIFIER_PROVIDER_GITHUB_COPILOT_HOME", str(provider_home))
+    clean_env.setenv("XDG_CACHE_HOME", str(xdg_cache_home))
+    if localappdata_parts is not None:
+        clean_env.setenv("LOCALAPPDATA", str(tmp_path.joinpath(*localappdata_parts)))
     with pytest.raises(ValueError, match=r"(disjoint|contained|MUST:3)"):
         load_provider_paths()
 
@@ -335,7 +335,10 @@ def test_pyproject_dependencies_have_no_host_packages_at_runtime() -> None:
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     deps = data["project"]["dependencies"]
     forbidden_prefixes = (
-        "amplifier-core", "amplifier-cli", "amplifier-distro", "amplifier-runtime",
+        "amplifier-core",
+        "amplifier-cli",
+        "amplifier-distro",
+        "amplifier-runtime",
     )
     bad = [d for d in deps if any(d.startswith(p) for p in forbidden_prefixes)]
     assert bad == [], f"Runtime deps must not include host packages: {bad}"

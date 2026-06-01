@@ -16,7 +16,6 @@ These tests verify:
 from __future__ import annotations
 
 import importlib.machinery
-import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -503,83 +502,18 @@ class TestPermissionRepair:
 
             assert result is True
 
-    @pytest.mark.xfail(
-        __import__("sys").platform == "win32",
-        reason="Unix permission tests require POSIX filesystem",
-        strict=True,
-    )
-    def test_already_executable_is_idempotent(self, tmp_path: Path) -> None:
-        """Returns True without chmod if already executable.
-
-        Contract: sdk-boundary:BinaryResolution:MUST:6
-        """
-        from amplifier_module_provider_github_copilot._permissions import (
-            ensure_executable,
-        )
-        from amplifier_module_provider_github_copilot._platform import (
-            PlatformInfo,
-            get_platform_info,
-        )
-
-        # Create executable file
-        binary = tmp_path / "copilot"
-        binary.touch()
-        binary.chmod(0o755)
-
-        unix_info = PlatformInfo(name="Unix", is_windows=False, cli_binary_name="copilot")
-
-        # Clear lru_cache before patching (get_platform_info uses @lru_cache)
-        get_platform_info.cache_clear()
-
-        with patch(
-            "amplifier_module_provider_github_copilot._platform.get_platform_info",
-            return_value=unix_info,
-        ):
-            result = ensure_executable(binary)
-
-            assert result is True
-            # Mode should be unchanged
-            assert binary.stat().st_mode & stat.S_IXUSR
-
-    @pytest.mark.xfail(
-        __import__("sys").platform == "win32",
-        reason="Unix permission tests require POSIX filesystem",
-        strict=True,
-    )
-    def test_adds_execute_permission(self, tmp_path: Path) -> None:
-        """Adds user+group execute permission.
-
-        Contract: sdk-boundary:BinaryResolution:MUST:6
-        """
-        from amplifier_module_provider_github_copilot._permissions import (
-            ensure_executable,
-        )
-        from amplifier_module_provider_github_copilot._platform import (
-            PlatformInfo,
-            get_platform_info,
-        )
-
-        # Create non-executable file
-        binary = tmp_path / "copilot"
-        binary.touch()
-        binary.chmod(0o644)
-
-        unix_info = PlatformInfo(name="Unix", is_windows=False, cli_binary_name="copilot")
-
-        # Clear lru_cache before patching (get_platform_info uses @lru_cache)
-        get_platform_info.cache_clear()
-
-        with patch(
-            "amplifier_module_provider_github_copilot._platform.get_platform_info",
-            return_value=unix_info,
-        ):
-            result = ensure_executable(binary)
-
-            assert result is True
-            # Should now have user execute
-            assert binary.stat().st_mode & stat.S_IXUSR
-            # Should have group execute
-            assert binary.stat().st_mode & stat.S_IXGRP
+    # NOTE: The previous tests `test_already_executable_is_idempotent` and
+    # `test_adds_execute_permission` were removed in 2026-05 as principal-engineer
+    # cleanup. Both used `tmp_path` and asserted on real on-disk `st_mode` bits,
+    # which made them `xfail(strict=True)` on Windows (NTFS drops POSIX exec
+    # bits silently). Their behavioral coverage now lives in `test_permissions.py`
+    # alongside the rest of the `ensure_executable` mocked-filesystem suite:
+    #   - already-executable idempotency
+    #     -> test_already_executable_returns_true_no_chmod
+    #   - happy-path chmod + least-privilege bits
+    #     -> test_adds_execute_permission_via_mocked_filesystem
+    # Contract: sdk-boundary:BinaryResolution:MUST:6
+    # Result: 2 xfails retired, +2 Windows passes, single canonical suite home.
 
     def test_returns_false_for_missing_file(self, tmp_path: Path) -> None:
         """Returns False for non-existent file.

@@ -57,8 +57,7 @@ def _resolve_absolute(value: str, env_name: str) -> Path:
     expanded = Path(value).expanduser()
     if not expanded.is_absolute():
         raise ValueError(
-            f"{env_name}={value!r} must be absolute after Path.expanduser(); "
-            f"got {expanded!s}"
+            f"{env_name}={value!r} must be absolute after Path.expanduser(); got {expanded!s}"
         )
     return expanded
 

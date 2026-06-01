@@ -100,10 +100,7 @@ class TestEventClassificationCoversLiveSDKEnum:
                     EventClassification.CONSUME,
                     EventClassification.DROP,
                 )
-                if any(
-                    "Unknown SDK event type" in rec.message
-                    for rec in caplog.records
-                ):
+                if any("Unknown SDK event type" in rec.message for rec in caplog.records):
                     unknown.append(value)
 
         assert not unknown, (
@@ -146,9 +143,7 @@ class TestExplicitDropEntriesEmitNoUnknownWarning:
         ):
             result = classify_event("commands.changed", config)
         assert result == EventClassification.DROP
-        assert not any(
-            "Unknown SDK event type" in rec.message for rec in caplog.records
-        ), (
+        assert not any("Unknown SDK event type" in rec.message for rec in caplog.records), (
             "commands.changed produced the unknown-event warning despite an "
             "explicit DROP entry in events.yaml; check that the entry is "
             "present and not shadowed."
@@ -208,8 +203,6 @@ class TestExplicitDropEntriesEmitNoUnknownWarning:
             f"forwarding it as BRIDGE/CONSUME would corrupt the streaming "
             f"contract."
         )
-        assert not any(
-            "Unknown SDK event type" in rec.message for rec in caplog.records
-        ), f"{event_type!r} fell through to unknown-event warning"
-
-
+        assert not any("Unknown SDK event type" in rec.message for rec in caplog.records), (
+            f"{event_type!r} fell through to unknown-event warning"
+        )

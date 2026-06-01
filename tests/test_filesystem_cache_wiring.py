@@ -24,8 +24,12 @@ FORBIDDEN_CACHE_ENV_KEYS = {"LOCALAPPDATA", "XDG_CACHE_HOME", "XDG_DATA_HOME"}
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     for k in (
-        ENV_VAR_NAME, "XDG_DATA_HOME", "XDG_CACHE_HOME", "LOCALAPPDATA",
-        "COPILOT_HOME", "COPILOT_CLI_PATH",
+        ENV_VAR_NAME,
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "LOCALAPPDATA",
+        "COPILOT_HOME",
+        "COPILOT_CLI_PATH",
     ):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
@@ -145,6 +149,7 @@ def test_models_cache_file_resolves_under_cache_home(
         lambda: sentinel,
     )
     from amplifier_module_provider_github_copilot.model_cache import get_cache_file_path
+
     result = get_cache_file_path()
     assert result.parent == sentinel_cache, (
         f"models_cache.json must resolve directly under cache_home; got {result}"
@@ -183,13 +188,18 @@ def test_no_cache_base_synthesis_outside_paths_module() -> None:
             if isinstance(node, ast.Call):
                 fn = node.func
                 is_environ_get = (
-                    isinstance(fn, ast.Attribute) and fn.attr == "get"
-                    and isinstance(fn.value, ast.Attribute) and fn.value.attr == "environ"
-                    and isinstance(fn.value.value, ast.Name) and fn.value.value.id == "os"
+                    isinstance(fn, ast.Attribute)
+                    and fn.attr == "get"
+                    and isinstance(fn.value, ast.Attribute)
+                    and fn.value.attr == "environ"
+                    and isinstance(fn.value.value, ast.Name)
+                    and fn.value.value.id == "os"
                 )
                 is_getenv = (
-                    isinstance(fn, ast.Attribute) and fn.attr == "getenv"
-                    and isinstance(fn.value, ast.Name) and fn.value.id == "os"
+                    isinstance(fn, ast.Attribute)
+                    and fn.attr == "getenv"
+                    and isinstance(fn.value, ast.Name)
+                    and fn.value.id == "os"
                 )
                 if (is_environ_get or is_getenv) and node.args:
                     first = node.args[0]
@@ -218,13 +228,16 @@ def test_no_cache_base_synthesis_outside_paths_module() -> None:
     allowlist_for_platform = {"_platform.py"}
     env_violations = [b for b in bad if "sys.platform" not in b]
     platform_violations = [
-        b for b in bad
+        b
+        for b in bad
         if "sys.platform" in b
-        and not any(b.startswith(f"{name}:") or f"\\{name}:" in b or f"/{name}:" in b
-                    for name in allowlist_for_platform)
+        and not any(
+            b.startswith(f"{name}:") or f"\\{name}:" in b or f"/{name}:" in b
+            for name in allowlist_for_platform
+        )
     ]
-    assert env_violations == [], (
-        "Cache-base env-key reads outside _paths.py:\n" + "\n".join(env_violations)
+    assert env_violations == [], "Cache-base env-key reads outside _paths.py:\n" + "\n".join(
+        env_violations
     )
     assert platform_violations == [], (
         "Forbidden sys.platform comparisons (cache-base synthesis suspected):\n"

@@ -143,7 +143,7 @@ class TestPermissionRequestDenial:
 class TestPermissionRequestDelegation:
     """deny-destroy:PermissionRequest:MUST:2 — deny_permission_request delegates to factory.
 
-    Contract: sdk-boundary:ImportQuarantine:MUST:7
+    Contract: sdk-boundary:ImportQuarantine:MUST:8
     """
 
     def test_deny_permission_request_delegates_to_make_permission_denied(self) -> None:
@@ -154,7 +154,7 @@ class TestPermissionRequestDelegation:
         not be duplicated in client.py.
 
         # Contract: deny-destroy:PermissionRequest:MUST:2
-        # Contract: sdk-boundary:ImportQuarantine:MUST:7
+        # Contract: sdk-boundary:ImportQuarantine:MUST:8
         """
         from amplifier_module_provider_github_copilot.sdk_adapter.client import (
             deny_permission_request,

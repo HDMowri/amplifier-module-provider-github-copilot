@@ -9,6 +9,7 @@ Contract: contracts/sdk-boundary.md
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pytest
@@ -488,6 +489,16 @@ class TestConfigInvariants:
             "on_event",
             "enable_config_discovery",
             "commands",
+            # MUST:7-15 b10 defense-in-depth pins (sdk-boundary v1.10).
+            "enable_session_store",
+            "enable_skills",
+            "enable_file_hooks",
+            "enable_host_git_operations",
+            "enable_on_demand_instruction_discovery",
+            "skip_embedding_retrieval",
+            "embedding_cache_storage",
+            "enable_session_telemetry",
+            "mcp_oauth_token_storage",
         }
 
         mock_client = ConfigCapturingMock()
@@ -670,6 +681,263 @@ class TestMinimalModeConfig:
             pass
         config = mock_client.last_config
         assert config.get("commands") == []
+
+    @pytest.mark.asyncio
+    async def test_enable_session_store_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:7 (b10).
+
+        Cross-session persistent store disabled — sessions are ephemeral per
+        complete() call (deny-destroy). Direct subscript: missing key fails loud.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["enable_session_store"] is False
+
+    @pytest.mark.asyncio
+    async def test_enable_skills_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:8 (b10).
+
+        SDK skills loader off (stronger than empty skill_directories at MUST:4).
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["enable_skills"] is False
+
+    @pytest.mark.asyncio
+    async def test_enable_file_hooks_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:9 (b10).
+
+        SDK file-hook discovery off — Amplifier registers a single deny-all hook.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["enable_file_hooks"] is False
+
+    @pytest.mark.asyncio
+    async def test_enable_host_git_operations_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:10 (b10).
+
+        Host-git delegation off — Amplifier never delegates git to the SDK.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["enable_host_git_operations"] is False
+
+    @pytest.mark.asyncio
+    async def test_enable_on_demand_instruction_discovery_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:11 (b10).
+
+        On-demand instruction scans off — complements enable_config_discovery=False (MUST:2).
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["enable_on_demand_instruction_discovery"] is False
+
+    @pytest.mark.asyncio
+    async def test_embedding_retrieval_skipped(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:12 (b10).
+
+        SDK embedding-based retrieval skipped — Amplifier owns context construction.
+        Pinned because mode="copilot-cli" does not invoke the empty-mode default
+        helper at b10 _mode.py:193-198 (which would otherwise default to True).
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["skip_embedding_retrieval"] is True
+
+    @pytest.mark.asyncio
+    async def test_embedding_cache_storage_in_memory(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:13 (b10).
+
+        Embedding cache kept in RAM — no on-disk residue across ephemeral session.
+        Pinned for the same mode="copilot-cli" reason as MUST:12. String field:
+        equality (==), not identity (is) — short-string interning is a CPython
+        implementation detail, not a contract.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["embedding_cache_storage"] == "in-memory"
+
+    @pytest.mark.asyncio
+    async def test_mcp_oauth_token_storage_in_memory(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:15 (b10).
+
+        MCP OAuth token storage kept in RAM — no on-disk token residue across
+        the ephemeral session boundary. Pinned for the same mode="copilot-cli"
+        reason as the other mode-gated capabilities: the SDK helper
+        ``_mcp_oauth_token_storage_default`` (b10 ``_mode.py:251-258``) returns
+        ``None`` for ``mode="copilot-cli"``, so the wire-emit at b10
+        ``client.py:1863-1865`` is omitted and the bundled-CLI runtime default
+        applies unless we pin. The emit is INDEPENDENT of ``mcp_servers``
+        (separate ``if`` block at ``client.py:1860-1861``). String field:
+        equality (==), not identity (is).
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["mcp_oauth_token_storage"] == "in-memory"
+
+    @pytest.mark.asyncio
+    async def test_enable_session_telemetry_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:14 (b10).
+
+        SDK-internal session telemetry off — Amplifier owns observability.
+        b10 client.py:1651-1656 documents telemetry as ON-by-default for
+        GitHub-authenticated sessions (our COPILOT_AGENT_TOKEN path); without
+        this pin, leaving the kwarg None lets the bundled CLI emit telemetry.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["enable_session_telemetry"] is False
+
+    @pytest.mark.asyncio
+    async def test_minimal_mode_pin_set_complete(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:1-15 superset closure.
+
+        Every MUST clause MUST be represented in the emitted session config —
+        guards against accidental field removal or rename silently dropping a pin.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config_keys = set(mock_client.last_config.keys())
+        required = {
+            "infinite_sessions",
+            "enable_config_discovery",
+            "mcp_servers",
+            "skill_directories",
+            "custom_agents",
+            "commands",
+            "enable_session_store",
+            "enable_skills",
+            "enable_file_hooks",
+            "enable_host_git_operations",
+            "enable_on_demand_instruction_discovery",
+            "skip_embedding_retrieval",
+            "embedding_cache_storage",
+            "enable_session_telemetry",
+            "mcp_oauth_token_storage",
+        }
+        missing = required - config_keys
+        assert missing == set(), (
+            f"MinimalMode pins missing from session config: {missing}. "
+            f"Every MUST:1-15 clause must round-trip through the emit dict."
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_unpinned_sdk_mode_gated_capability(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:1-15 SDK-introspection closure.
+
+        The static superset test above hardcodes the pin list, so it can never
+        catch a NEW mode-gated capability that a future SDK introduces. This
+        test instead enumerates the SDK at runtime: every ``_<kwarg>_default``
+        helper in ``copilot._mode`` whose first parameter is ``mode`` and whose
+        stripped name is a real ``create_session`` parameter is a mode-gated
+        capability default. Under ``mode="copilot-cli"`` each returns ``None``
+        (deferring to the bundled-CLI default), so the provider MUST pin it to
+        own the wire shape — OR record an explicit, reasoned deferral.
+
+        This test is COUPLED to the pinned SDK by design: a future SDK bump that
+        adds a 10th mode-gated helper invalidates it on purpose, forcing a
+        conscious pin-or-defer decision rather than a silent default leak.
+        """
+        import importlib  # noqa: PLC0415
+
+        from copilot.client import CopilotClient  # noqa: PLC0415
+
+        # Private SDK module — introspected at runtime; intentionally not part
+        # of the typing stub surface, so load it dynamically.
+        _mode = importlib.import_module("copilot._mode")
+
+        create_session_params = set(
+            inspect.signature(CopilotClient.create_session).parameters
+        )
+
+        # Explicit, reasoned deferrals. Empty after MUST:15 lands — every
+        # mode-gated capability the provider can reach is pinned. Each entry,
+        # if added, MUST cite why the default is acceptable unpinned.
+        deferred: dict[str, str] = {}
+
+        discovered: dict[str, object] = {}
+        for name, fn in inspect.getmembers(_mode, inspect.isfunction):
+            if not name.endswith("_default"):
+                continue
+            params = list(inspect.signature(fn).parameters)
+            if not params or params[0] != "mode":
+                continue
+            kwarg = name[1 : -len("_default")]
+            # Excludes the generic ``_empty_mode_bool_default`` wrapper, whose
+            # stripped name is not a create_session parameter.
+            if kwarg not in create_session_params:
+                continue
+            # A real mode-gated default: concrete value under empty mode,
+            # ``None`` under copilot-cli (defers to the bundled CLI).
+            assert fn("empty", None) is not None, (
+                f"{name} is not a mode-gated default (empty mode returned None)"
+            )
+            assert fn("copilot-cli", None) is None, (
+                f"{name} does not defer under copilot-cli; introspection "
+                f"assumption broken — re-derive the pin set."
+            )
+            discovered[kwarg] = fn("empty", None)
+
+        assert set(deferred) <= set(discovered), (
+            f"Stale deferral allowlist entries no longer in the SDK: "
+            f"{set(deferred) - set(discovered)}"
+        )
+
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+
+        unpinned: list[str] = []
+        for kwarg, empty_default in discovered.items():
+            if kwarg in deferred:
+                continue
+            if kwarg not in config:
+                unpinned.append(kwarg)
+                continue
+            # MinimalMode mirrors the SDK's own empty-mode default for every
+            # capability — value-level assertion, not mere key presence.
+            assert config[kwarg] == empty_default, (
+                f"{kwarg} pinned to {config[kwarg]!r} but SDK empty-mode "
+                f"default is {empty_default!r}; MinimalMode must mirror it."
+            )
+        assert not unpinned, (
+            f"SDK mode-gated capabilities reach the provider unpinned (and not "
+            f"in the deferral allowlist): {sorted(unpinned)}. Pin each in "
+            f"config/_sdk_protection.py + sdk_adapter/client.py, or add an "
+            f"explicit reasoned entry to `deferred`."
+        )
 
     @pytest.mark.asyncio
     async def test_minimal_mode_mutation_does_not_leak_between_sessions(self) -> None:

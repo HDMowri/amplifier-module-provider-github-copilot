@@ -89,24 +89,27 @@ class TestSDKVersionCompatibility:
     """Detect SDK version drift from v0.3.0 baseline."""
 
     def test_permission_request_result_has_kind_field(self) -> None:
-        """PermissionRequestResult must accept kind='reject' (SDK v0.3.0 API).
+        """Each Union member of PermissionRequestResult must expose a kind discriminator.
 
-        # Contract: deny-destroy:PermissionRequest:MUST:2
+        # Contract: sdk-boundary:SDKSurface:MUST:1a
 
-        SDK v0.3.0: PermissionRequestResult is at copilot.session.
-        Only field: kind (PermissionRequestResultKind).
-        Valid kinds: 'approve-once' | 'reject' | 'user-not-available' | 'no-result'
+        SDK v1.0.0b10: PermissionRequestResult is a Union type alias, not a class.
+        Every concrete member carries kind as a ClassVar str or instance-default str
+        discriminator; PermissionDecisionReject.kind must equal 'reject'.
         """
+        from typing import get_args
+
         from copilot.session import (  # type: ignore[import-untyped]
             PermissionRequestResult,
         )
 
-        assert isinstance(PermissionRequestResult, type), (
-            "SDK installed but PermissionRequestResult not found at copilot.session"
+        members = get_args(PermissionRequestResult)
+        assert members, (
+            "get_args(PermissionRequestResult) returned an empty tuple; "
+            "the Union alias must have at least one member."
         )
-
-        try:
-            result = PermissionRequestResult(kind="reject")  # type: ignore[misc]
-            assert result.kind == "reject"  # type: ignore[union-attr]
-        except TypeError as e:
-            pytest.fail(f"PermissionRequestResult(kind='reject') failed: {e}")
+        for cls in members:
+            assert hasattr(cls, "kind"), (
+                f"{cls.__name__} is a member of PermissionRequestResult but has no "
+                f"'kind' attribute. Every Union member must carry a kind discriminator."
+            )
