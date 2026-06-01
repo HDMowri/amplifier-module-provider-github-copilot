@@ -24,12 +24,13 @@ User-visible changes:
 - **What:** The provider now requires `github-copilot-sdk==1.0.0b10`. On
   import, the provider checks the installed SDK version and raises a
   clear `ImportError` if the installed version is older. The bump from
-  b9 to b10 adds 8 new `MinimalMode` session-config pins (MUST:7-14:
+  b9 to b10 adds 9 new `MinimalMode` session-config pins (MUST:7-15:
   `enable_session_store`, `enable_skills`, `enable_file_hooks`,
   `enable_host_git_operations`, `enable_on_demand_instruction_discovery`,
   `skip_embedding_retrieval`, `embedding_cache_storage`,
-  `enable_session_telemetry`) so the SDK's defense-in-depth defaults are
-  pinned explicitly. Wire-shape change only — no provider API change.
+  `enable_session_telemetry`, `mcp_oauth_token_storage`) so the SDK's
+  defense-in-depth defaults are pinned explicitly. Wire-shape change only — no
+  provider API change.
 - **Behavior on upgrade:** Older SDK installs (`1.0.0b4`–`b9`) raise an
   actionable error at provider import time that names the required
   version and the install command.

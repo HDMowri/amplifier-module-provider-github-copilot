@@ -421,13 +421,14 @@ class TestSdkVersionFloorMatchesSymbolRequirements:
     Contract: sdk-boundary:Membrane:MUST:5
 
     The adapter calls ``CopilotClient(base_directory=..., mode="copilot-cli", ...)``
-    in ``sdk_adapter/client.py`` plus the 8 new MinimalMode kwargs
+    in ``sdk_adapter/client.py`` plus the 9 new MinimalMode kwargs
     (``enable_session_store``, ``enable_skills``, ``enable_file_hooks``,
     ``enable_host_git_operations``, ``enable_on_demand_instruction_discovery``,
     ``skip_embedding_retrieval``, ``embedding_cache_storage``,
-    ``enable_session_telemetry``) added at b10 (verified against SDK b10
-    ``client.py:1573-1605``). Any SDK older than b10 fails at first
-    ``create_session(...)`` with ``TypeError: unexpected keyword argument``.
+    ``enable_session_telemetry``, ``mcp_oauth_token_storage``) added at b10
+    (verified against SDK b10 ``client.py:1573-1605``). Any SDK older than b10
+    fails at first ``create_session(...)`` with
+    ``TypeError: unexpected keyword argument``.
     The runtime guard must reject those versions at import time so users
     get the actionable reinstall message instead of a deferred ``TypeError``.
     """
@@ -435,7 +436,7 @@ class TestSdkVersionFloorMatchesSymbolRequirements:
     def test_rejects_pre_b9_one_x_versions(self) -> None:
         """sdk-boundary:Membrane:MUST:5 — b4–b9 must NOT pass the guard.
 
-        These versions lack at least one of the b10 MinimalMode MUST:7-14
+        These versions lack at least one of the b10 MinimalMode MUST:7-15
         kwargs the adapter passes unconditionally to ``create_session``.
         """
         from amplifier_module_provider_github_copilot import (
@@ -452,7 +453,7 @@ class TestSdkVersionFloorMatchesSymbolRequirements:
     def test_accepts_b10_and_above(self) -> None:
         """sdk-boundary:Membrane:MUST:5 — b10 and forward all satisfy the floor.
 
-        b10 is the lower bound (introduction of MinimalMode MUST:7-14 kwargs)
+        b10 is the lower bound (introduction of MinimalMode MUST:7-15 kwargs)
         and also the pyproject pin; final 1.0.0 (post-beta) and onward must pass.
         """
         from amplifier_module_provider_github_copilot import (

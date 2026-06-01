@@ -89,10 +89,10 @@ class TestSDKImportAssumptions:
                 "skill_directories",
                 "custom_agents",
                 "commands",
-                # b10 MinimalMode:MUST:7-14 — 8 new defense-in-depth pins
+                # b10 MinimalMode:MUST:7-15 — 9 defense-in-depth pins
                 # forwarded by _minimal_mode_session_config(). See
-                # contracts/sdk-boundary.md v1.9 History row and
-                # config/_sdk_protection.py:59-96 for the wire shape.
+                # contracts/sdk-boundary.md v1.10 History row and
+                # config/_sdk_protection.py for the wire shape.
                 "enable_session_store",
                 "enable_skills",
                 "enable_file_hooks",
@@ -101,6 +101,7 @@ class TestSDKImportAssumptions:
                 "skip_embedding_retrieval",
                 "embedding_cache_storage",
                 "enable_session_telemetry",
+                "mcp_oauth_token_storage",
             }
         )
 

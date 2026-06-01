@@ -1,12 +1,13 @@
 # Contract: SDK Boundary (The Membrane)
 
 ## Version
-- **Current:** 1.9 (SDK v1.0.0b10 — MinimalMode extended to MUST:1-14 with 8 new defense-in-depth session-capability pins)
+- **Current:** 1.10 (SDK v1.0.0b10 — MinimalMode extended to MUST:1-15 with 9 defense-in-depth session-capability pins)
 - **Module Reference:** amplifier_module_provider_github_copilot/sdk_adapter/
 - **Status:** Non-Negotiable Constraint
-- **Update:** 2026-05-30 — MinimalMode extended from MUST:1-6 to MUST:1-14. b10 added 8 new `create_session` kwargs gating SDK-internal capabilities (session store, skills loader, file hooks, host git, on-demand instruction discovery, embedding retrieval, embedding cache storage, session telemetry). Helpers at b10 `_mode.py:185-258` only collapse `None` to defaults when `mode == "empty"`; our adapter ships `mode="copilot-cli"` (`sdk_adapter/client.py:419-424`), so leaving any kwarg unset hands control to the bundled CLI. Explicit pin is a real wire-shape change, not intent-pinning. v1.8 SDKSurface clauses verified byte-compatible against b10 — no production source change beyond the 8 new MinimalMode emits.
+- **Update:** 2026-06-01 — MinimalMode extended from MUST:1-6 to MUST:1-15. b10 added 8 new `create_session` kwargs gating SDK-internal capabilities (session store, skills loader, file hooks, host git, on-demand instruction discovery, embedding retrieval, embedding cache storage, MCP OAuth token storage), plus the pre-existing b9 `enable_session_telemetry` consolidated here. Helpers at b10 `_mode.py:185-258` only collapse `None` to defaults when `mode == "empty"`; our adapter ships `mode="copilot-cli"` (`sdk_adapter/client.py:419-424`), so leaving any kwarg unset hands control to the bundled CLI. Explicit pin is a real wire-shape change, not intent-pinning. v1.10 pins the 9th mode-gated default (`mcp_oauth_token_storage`) and corrects the v1.9 claim that `mcp_servers={}` foreclosed its wire-emit — it does not; the emit is independent at b10 `client.py:1863-1865`. v1.8 SDKSurface clauses verified byte-compatible against b10 — no production source change beyond the 9 MinimalMode emits.
 - **History:**
-  - **1.9** — SDK v1.0.0b10: MinimalMode:MUST:7-14 added (`enable_session_store=False`, `enable_skills=False`, `enable_file_hooks=False`, `enable_host_git_operations=False`, `enable_on_demand_instruction_discovery=False`, `skip_embedding_retrieval=True`, `embedding_cache_storage="in-memory"`, `enable_session_telemetry=False`). Mode-mismatch rationale: b10 `_mode.py:175-182` `_empty_mode_bool_default` returns `empty_default` ONLY when `mode == "empty"`; our adapter mode is `copilot-cli`. Wire emit at b10 `client.py:1852-1905` only serializes a kwarg when non-`None`. Sub-clauses recorded in MinimalMode constraint + test-anchor tables. Telemetry is pinned `False` because b10 `client.py:1651-1656` documents telemetry as ON-by-default for GitHub-authenticated sessions (our auth path); leaving the kwarg unset would silently opt the provider in. `mcp_oauth_token_storage` deliberately OUT_OF_SCOPE — `mcp_servers={}` (MUST:3) forecloses the wire-emit at b10 `client.py:1860-1861`.
+  - **1.10** — SDK v1.0.0b10: MinimalMode:MUST:15 added — `mcp_oauth_token_storage="in-memory"`, the 9th and final SDK mode-gated capability default. Corrects the v1.9 rationale that scoped this switch out: the `mcpOAuthTokenStorage` wire-emit (b10 `client.py:1863-1865`) is an INDEPENDENT `if mcp_oauth_token_storage is not None` block, NOT gated by the `mcpServers` emit (b10 `client.py:1860-1861`), so `mcp_servers={}` (MUST:3) does not foreclose it. Under `mode="copilot-cli"` the helper `_mcp_oauth_token_storage_default` (b10 `_mode.py:251-258`) returns `None` — byte-identical in shape to `_embedding_cache_storage_default` (b10 `_mode.py:201-208`, MUST:13) — so the bundled-CLI default applies unless pinned. Pinned `"in-memory"` to mirror the SDK's own empty-mode default and MUST:13. The only reason there was no live exposure at v1.9 is one level up (no MCP servers ⇒ no OAuth flow), a silent coupling now removed. Closure hardened: `test_no_unpinned_sdk_mode_gated_capability` runtime-enumerates the `_mode` mode-gated helpers so a future 10th default fails loudly. `manage_schedule_enabled` / `coauthor_enabled` remain out of scope — see the MinimalMode Out-of-scope subsection.
+  - **1.9** — SDK v1.0.0b10: MinimalMode:MUST:7-14 added (`enable_session_store=False`, `enable_skills=False`, `enable_file_hooks=False`, `enable_host_git_operations=False`, `enable_on_demand_instruction_discovery=False`, `skip_embedding_retrieval=True`, `embedding_cache_storage="in-memory"`, `enable_session_telemetry=False`). Mode-mismatch rationale: b10 `_mode.py:175-182` `_empty_mode_bool_default` returns `empty_default` ONLY when `mode == "empty"`; our adapter mode is `copilot-cli`. Wire emit at b10 `client.py:1852-1905` only serializes a kwarg when non-`None`. Sub-clauses recorded in MinimalMode constraint + test-anchor tables. Telemetry is pinned `False` because b10 `client.py:1651-1656` documents telemetry as ON-by-default for GitHub-authenticated sessions (our auth path); leaving the kwarg unset would silently opt the provider in. (`mcp_oauth_token_storage` is addressed separately at v1.10 — see above.)
   - **1.8** — SDK v1.0.0b9: SDKSurface:MUST:6 corrected — `copilot.session.CopilotSession.send` accepts four keyword-only kwargs (`attachments`, `mode`, `agent_mode`, `request_headers`), not three. Anchor: b9 `session.py:L1154-L1160`. Test fixture at `tests/fixtures/sdk_mocks.py:L184-L192` already mirrored this shape; only the contract clause was stale. No production source change.
   - **1.7** — SDK v1.0.0b9: `SubprocessConfig` removed (b7) — confirmed absent from b9 `copilot/__init__.py:L1-L274` and `copilot/client.py:L100-L115`; `CopilotClient.__init__` is keyword-only (b9 `client.py:L1051-L1067`); `PermissionRequestResult` is the type alias `PermissionDecision | PermissionNoResult` (b9 `session.py:L270`); permission-denial uses `PermissionDecisionReject()` imported from `copilot.generated.rpc` (b9 `session.py:L29-L57` imports the variant; b9 root `__init__.py:L94, L203` re-exports the alias but not the variants).
   - **1.6** — SDK v1.0.0b4: `ModelBilling.multiplier` is now `float | None = None`; `ModelBilling.from_dict` no longer raises when `multiplier` is absent. Fresh installs and the model-discovery / configure-wizard paths (`amplifier init`, `amplifier provider models`, `provider edit`) were hard-broken on v0.3.0 once GitHub stopped emitting `multiplier`. The `complete()` runtime path was unaffected. New regression tests under `SDKSurface:MUST:7` pin the tolerance so any future SDK re-tightening fails loudly here.
@@ -461,6 +462,7 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | sdk-boundary:MinimalMode:MUST:12 | `skip_embedding_retrieval` MUST be set to `True` | Disables SDK embedding-based workspace retrieval — Amplifier owns retrieval/context. Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at b10 `_mode.py:193-198`. |
 | sdk-boundary:MinimalMode:MUST:13 | `embedding_cache_storage` MUST be set to `"in-memory"` | Prevents persistent disk cache of workspace embeddings — aligns with deny-destroy / ephemeral session. Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at b10 `_mode.py:201-208`. |
 | sdk-boundary:MinimalMode:MUST:14 | `enable_session_telemetry` MUST be set to `False` | Disables SDK-internal session telemetry — Amplifier owns observability. Pinned because b10 `client.py:1651-1656` documents telemetry as ON-by-default for GitHub-authenticated sessions and our `COPILOT_AGENT_TOKEN` path IS that path; without pin, leaving kwarg `None` lets the bundled CLI emit telemetry by default. |
+| sdk-boundary:MinimalMode:MUST:15 | `mcp_oauth_token_storage` MUST be set to `"in-memory"` | Keeps MCP OAuth tokens in RAM — no on-disk token residue across the ephemeral session boundary. Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at b10 `_mode.py:251-258`; the wire-emit (b10 `client.py:1863-1865`) is INDEPENDENT of the `mcpServers` emit (`client.py:1860-1861`), so `mcp_servers={}` (MUST:3) does NOT foreclose it. |
 
 ### Test Anchors
 
@@ -480,6 +482,32 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | `sdk-boundary:MinimalMode:MUST:12` | embedding retrieval skipped | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_embedding_retrieval_skipped` |
 | `sdk-boundary:MinimalMode:MUST:13` | embedding cache in-memory | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_embedding_cache_storage_in_memory` |
 | `sdk-boundary:MinimalMode:MUST:14` | session telemetry disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_enable_session_telemetry_disabled` |
+| `sdk-boundary:MinimalMode:MUST:15` | mcp oauth token storage in-memory | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_mcp_oauth_token_storage_in_memory` |
+
+### Out of scope (mode-gated defaults not pinned)
+
+The 9 pins above cover every SDK mode-gated capability default reached through
+`create_session` — the `_<kwarg>_default(mode, supplied)` helpers in b10
+`_mode.py:185-258`. Two related SDK defaults are deliberately NOT pinned:
+
+- **`manage_schedule_enabled` / `coauthor_enabled`** — these ARE
+  `create_session` kwargs (b10 `client.py:1576-1577`) but have no
+  `_<kwarg>_default(mode, supplied)` mode-gated helper in `_mode.py:185-258`.
+  They flow through `_post_create_options_patch` (b10 `_mode.py:261-298`),
+  applied internally by `create_session` via `_apply_post_create_options_patch`
+  (b10 `client.py:2099`). The provider passes neither, so both default to
+  `None`; under `mode="copilot-cli"` the patch builder returns `None`
+  (`_mode.py:298`, `return patch or None`) and `session.options.update` is
+  never called — neither option reaches the wire. `coauthor_enabled` is
+  additionally neutralized by MUST:10 (`enable_host_git_operations=False`).
+  Pinning either to `False` would add an `options.update` round-trip the
+  provider does not currently make; tracked as a follow-up if the provider
+  adopts that path.
+- **`mcp_oauth_token_storage` on `resume_session`** — `resume_session`
+  (b10 `client.py:2117`) carries the same independent emit at
+  `client.py:2429-2431`, but the provider creates sessions only via
+  `create_session`; the resume path is unused. If the provider ever resumes
+  sessions, MUST:15 must be extended to that call site.
 
 ---
 

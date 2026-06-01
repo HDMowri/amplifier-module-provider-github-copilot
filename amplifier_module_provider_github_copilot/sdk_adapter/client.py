@@ -86,7 +86,7 @@ def _minimal_mode_session_config() -> dict[str, Any]:
         "skill_directories": list(minimal_mode.skill_directories),
         "custom_agents": list(minimal_mode.custom_agents),
         "commands": list(minimal_mode.commands),
-        # MUST:7-14 — b10 defense-in-depth pins. See _sdk_protection.py for
+        # MUST:7-15 — b10 defense-in-depth pins. See _sdk_protection.py for
         # mode="copilot-cli" rationale (empty-mode default helpers do not fire).
         "enable_session_store": minimal_mode.enable_session_store,
         "enable_skills": minimal_mode.enable_skills,
@@ -98,6 +98,7 @@ def _minimal_mode_session_config() -> dict[str, Any]:
         "skip_embedding_retrieval": minimal_mode.skip_embedding_retrieval,
         "embedding_cache_storage": minimal_mode.embedding_cache_storage,
         "enable_session_telemetry": minimal_mode.enable_session_telemetry,
+        "mcp_oauth_token_storage": minimal_mode.mcp_oauth_token_storage,
     }
 
 

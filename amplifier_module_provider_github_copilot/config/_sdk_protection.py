@@ -26,22 +26,22 @@ __all__ = [
 class MinimalModeConfig:
     """Minimal mode session configuration policy.
 
-    Contract: sdk-boundary:MinimalMode:MUST:1-14
+    Contract: sdk-boundary:MinimalMode:MUST:1-15
 
     Disables SDK features that Amplifier handles, ensuring Amplifier is the sole
     orchestrator. Evidence: 57% wall-clock improvement (12.5s → 5.4s) confirmed
     in sessions 7db2b5f7 and 2fa58db6 (MUST:1-6 baseline, b9).
 
-    MUST:7-14 are pinned as part of the b10 bump. MUST:7-13 are new
+    MUST:7-15 are pinned as part of the b10 bump. MUST:7-13 and MUST:15 are new
     create_session kwargs introduced at b10 (verified against b10
-    `client.py:1582-1605`); MUST:14 (`enable_session_telemetry`) was
-    already a b9 kwarg (b9 `client.py:1550`) and is consolidated under
-    MinimalMode now so all SDK-internal session capabilities live in one
-    place. Each of the 8 kwargs has an empty-mode default helper at b10
-    `_mode.py:185-258` that fires ONLY when `mode == "empty"`. Our
-    adapter ships `mode="copilot-cli"`, so explicit pins ARE the wire
-    shape — leaving any of these `None` lets the bundled CLI defaults
-    apply.
+    `client.py:1582-1605` and absent from b9); MUST:14
+    (`enable_session_telemetry`) was already a b9 kwarg (b9 `client.py:1550`)
+    and is consolidated under MinimalMode now so all SDK-internal session
+    capabilities live in one place. Each of the 9 kwargs has an empty-mode
+    default helper at b10 `_mode.py:185-258` that fires ONLY when
+    `mode == "empty"`. Our adapter ships `mode="copilot-cli"`, so explicit pins
+    ARE the wire shape — leaving any of these `None` lets the bundled CLI
+    defaults apply.
     """
 
     # MUST:1 — Disable SDK compaction; Amplifier manages context.
@@ -93,6 +93,14 @@ class MinimalModeConfig:
     # observability. b10 `client.py:1651-1656` documents this as ON-by-default
     # for GitHub-authenticated sessions, which is our COPILOT_AGENT_TOKEN path.
     enable_session_telemetry: bool = False
+
+    # MUST:15 — Keep MCP OAuth token storage in RAM; no on-disk token residue
+    # across the ephemeral session boundary. Mirrors MUST:13. The wire emit at
+    # b10 `client.py:1863-1865` is INDEPENDENT of `mcp_servers` (MUST:3); under
+    # `mode="copilot-cli"` the helper `_mcp_oauth_token_storage_default`
+    # (b10 `_mode.py:251-258`) returns None, so without this pin the bundled-CLI
+    # default applies.
+    mcp_oauth_token_storage: Literal["persistent", "in-memory"] = "in-memory"
 
 
 @dataclass(frozen=True)

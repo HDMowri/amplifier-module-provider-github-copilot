@@ -25,7 +25,8 @@ dependencies = [
     # GitHub Copilot SDK
     # - v1.0.0b7: SubprocessConfig removed; CopilotClient takes direct kwargs
     # - v1.0.0b9: on_list_models + mode kwargs (additive)
-    # - v1.0.0b10: 8 new create_session kwargs (MinimalMode:MUST:7-14)
+    # - v1.0.0b10: 8 new create_session kwargs + telemetry consolidation
+    #   (MinimalMode:MUST:7-15)
     "github-copilot-sdk==1.0.0b10",
     # PyYAML for config loading
     "pyyaml>=6.0",

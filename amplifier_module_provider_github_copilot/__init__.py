@@ -48,15 +48,16 @@ def _check_sdk_version(version_str: str) -> None:
 
     The b10 floor matches what the adapter actually calls:
     ``CopilotClient(base_directory=..., mode="copilot-cli", ...)`` plus the
-    8 MinimalMode kwargs pinned at b10 (``enable_session_store``,
+    9 MinimalMode kwargs pinned at b10 (``enable_session_store``,
     ``enable_skills``, ``enable_file_hooks``, ``enable_host_git_operations``,
     ``enable_on_demand_instruction_discovery``, ``skip_embedding_retrieval``,
-    ``embedding_cache_storage``, ``enable_session_telemetry``). The first
-    seven are new ``create_session`` kwargs in b10 (verified against SDK
-    b10 ``client.py:1582-1605``); passing any of them to b9 raises
-    ``TypeError: unexpected keyword argument`` at the first
-    ``create_session(...)`` call. The eighth, ``enable_session_telemetry``,
-    is a pre-existing b9 kwarg consolidated under MinimalMode now.
+    ``embedding_cache_storage``, ``enable_session_telemetry``,
+    ``mcp_oauth_token_storage``). Eight are new ``create_session`` kwargs in
+    b10 (the seven feature toggles plus ``mcp_oauth_token_storage``; verified
+    against SDK b10 ``client.py:1582-1605`` and absent from b9); passing any of
+    them to b9 raises ``TypeError: unexpected keyword argument`` at the first
+    ``create_session(...)`` call. ``enable_session_telemetry`` is a pre-existing
+    b9 kwarg consolidated under MinimalMode now.
     Surfacing the floor at import time gives the user the actionable
     reinstall message instead of a deferred ``TypeError``.
 
@@ -74,7 +75,7 @@ def _check_sdk_version(version_str: str) -> None:
     if _parse_sdk_version(version_str) < _SDK_FLOOR:
         raise ImportError(
             f"github-copilot-sdk=={version_str} is below the symbol-availability "
-            "floor (>=1.0.0b10 required; MinimalMode MUST:7-14 kwargs added at b10). "
+            "floor (>=1.0.0b10 required; MinimalMode MUST:7-15 kwargs added at b10). "
             "Pinned target: ==1.0.0b10 (pyproject.toml). "
             "Reinstall with: pip install 'github-copilot-sdk==1.0.0b10' "
             f"or: amplifier provider install --force {PROVIDER_ID}"
