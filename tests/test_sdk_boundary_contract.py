@@ -244,6 +244,8 @@ class TestToolForwardingContract:
             )
             assert tool.skip_permission is False
             assert tool.handler is None, "handler MUST be None (Amplifier handles tools)"
+            # SDK v1.0.2 reads tool.defer when building tool definitions; None = not deferred.
+            assert tool.defer is None, "defer MUST default to None (v1.0.1 wire parity)"
 
     @pytest.mark.asyncio
     async def test_toolspec_objects_converted_correctly(self) -> None:
@@ -295,6 +297,67 @@ class TestToolForwardingContract:
         )
         assert tool.skip_permission is False
         assert tool.handler is None, "handler MUST be None for SDK to skip registration"
+        assert tool.defer is None, "defer MUST default to None (v1.0.1 wire parity)"
+
+    def test_wrapper_survives_sdk_v102_tool_definition_build(self) -> None:
+        """Reproduce the EXACT attribute-read loop SDK v1.0.2 uses to build tool
+        definitions, proving SDKToolWrapper exposes every attribute the SDK reads.
+
+        Contract: sdk-boundary:ToolForwarding:MUST:2
+
+        SDK v1.0.2 ``copilot/client.py`` builds the wire definition with::
+
+            definition = {"name": tool.name, "description": tool.description}
+            if tool.parameters: definition["parameters"] = tool.parameters
+            if tool.overrides_built_in_tool: definition["overridesBuiltInTool"] = True
+            if tool.skip_permission: definition["skipPermission"] = True
+            if tool.defer is not None: definition["defer"] = tool.defer
+
+        v1.0.2 ADDED the ``tool.defer`` access. A wrapper missing ``defer`` raises
+        ``AttributeError`` on every tool-forwarding turn — a real production break
+        the mocked unit/contract suite and the (tool-less) live smoke tests do not
+        exercise. This test pins the wrapper against that exact access sequence so a
+        future SDK attribute addition fails loudly here, and asserts the v1.0.1 wire
+        shape is preserved (no ``defer`` key emitted when ``defer is None``).
+        """
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import (
+            convert_tools_for_sdk,
+        )
+
+        tools: list[dict[str, object]] = [
+            {"name": "bash", "description": "Run shell commands", "parameters": {"type": "object"}},
+            {"name": "read_file", "description": "Read a file", "parameters": None},
+        ]
+        wrappers = convert_tools_for_sdk(tools)
+
+        for tool in wrappers:
+            # Verbatim replication of the SDK v1.0.2 definition-build loop. If the
+            # wrapper is missing any read attribute this raises AttributeError,
+            # exactly as the live runtime did before `defer` was added.
+            definition: dict[str, object] = {
+                "name": tool.name,
+                "description": tool.description,
+            }
+            if tool.parameters:
+                definition["parameters"] = tool.parameters
+            if tool.overrides_built_in_tool:
+                definition["overridesBuiltInTool"] = True
+            if tool.skip_permission:
+                definition["skipPermission"] = True
+            if tool.defer is not None:
+                definition["defer"] = tool.defer
+
+            # v1.0.1 wire parity: defer defaults to None, so the key is omitted.
+            assert "defer" not in definition, (
+                "defer=None MUST omit the 'defer' wire key (v1.0.1 parity)"
+            )
+            # Non-vacuous: the wire key MUST be present (== True) when the wrapper
+            # flag is set and ABSENT (== None via .get) when it is not — verifying
+            # the converter -> wire mapping, not merely re-asserting the literal
+            # True we just wrote one line above.
+            assert definition.get("overridesBuiltInTool") == (
+                True if tool.overrides_built_in_tool else None
+            )
 
     @pytest.mark.asyncio
     async def test_execute_sdk_completion_accepts_tools_param(self) -> None:
@@ -499,6 +562,8 @@ class TestConfigInvariants:
             "embedding_cache_storage",
             "enable_session_telemetry",
             "mcp_oauth_token_storage",
+            # MUST:16 — v1.0.2 mode-gated 'memory' pin (sdk-boundary).
+            "memory",
         }
 
         mock_client = ConfigCapturingMock()
@@ -801,6 +866,27 @@ class TestMinimalModeConfig:
         assert config["mcp_oauth_token_storage"] == "in-memory"
 
     @pytest.mark.asyncio
+    async def test_memory_disabled(self) -> None:
+        """Contract: sdk-boundary:MinimalMode:MUST:16 (v1.0.2).
+
+        SDK memory feature pinned OFF — Amplifier owns context and persistence,
+        and sessions are ephemeral per ``complete()`` call. ``memory`` is a new
+        v1.0.2 mode-gated ``create_session`` kwarg whose empty-mode default
+        helper ``_memory_default`` (v1.0.2 ``_mode.py:264-276``) returns
+        ``{"enabled": False}`` ONLY when ``mode == "empty"``. Our adapter ships
+        ``mode="copilot-cli"``, where the helper returns ``None`` and the
+        bundled-CLI default would otherwise apply — so this explicit pin IS the
+        wire shape. Value-level assertion (==): the emitted payload must mirror
+        the SDK empty-mode default dict exactly, not merely be present.
+        """
+        mock_client = ConfigCapturingMock()
+        wrapper = CopilotClientWrapper(sdk_client=mock_client)
+        async with wrapper.session(model="gpt-4o"):
+            pass
+        config = mock_client.last_config
+        assert config["memory"] == {"enabled": False}
+
+    @pytest.mark.asyncio
     async def test_enable_session_telemetry_disabled(self) -> None:
         """Contract: sdk-boundary:MinimalMode:MUST:14 (b10).
 
@@ -818,7 +904,7 @@ class TestMinimalModeConfig:
 
     @pytest.mark.asyncio
     async def test_minimal_mode_pin_set_complete(self) -> None:
-        """Contract: sdk-boundary:MinimalMode:MUST:1-15 superset closure.
+        """Contract: sdk-boundary:MinimalMode:MUST:1-16 superset closure.
 
         Every MUST clause MUST be represented in the emitted session config —
         guards against accidental field removal or rename silently dropping a pin.
@@ -844,11 +930,13 @@ class TestMinimalModeConfig:
             "embedding_cache_storage",
             "enable_session_telemetry",
             "mcp_oauth_token_storage",
+            # MUST:16 — v1.0.2 mode-gated 'memory' pin (sdk-boundary).
+            "memory",
         }
         missing = required - config_keys
         assert missing == set(), (
             f"MinimalMode pins missing from session config: {missing}. "
-            f"Every MUST:1-15 clause must round-trip through the emit dict."
+            f"Every MUST:1-16 clause must round-trip through the emit dict."
         )
 
     @pytest.mark.asyncio

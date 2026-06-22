@@ -9,7 +9,7 @@ Contract: contracts/sdk-boundary.md
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +205,15 @@ class SDKToolWrapper:
     overrides_built_in_tool: bool = False
     skip_permission: bool = False
     handler: Any = None  # SDK checks this; None means skip handler registration
+    # SDK v1.0.2 reads tool.defer when building tool definitions
+    # (copilot/client.py: `if tool.defer is not None: definition["defer"] = tool.defer`).
+    # Mirrors the SDK's own copilot.tools.Tool.defer field type. None = not deferred:
+    # the key is omitted from the wire payload, which is the exact pre-v1.0.2 behavior.
+    # Amplifier pre-loads all tools (kernel-layer execution), so the SDK's lazy
+    # tool-search deferral stays off. Without this attribute the SDK raises
+    # AttributeError on every tool-forwarding turn.
+    # Contract: sdk-boundary:ToolForwarding:MUST:2
+    defer: Literal["auto", "never"] | None = None
 
 
 def convert_tools_for_sdk(tools: list[Any]) -> list[SDKToolWrapper]:
@@ -248,6 +257,12 @@ def convert_tools_for_sdk(tools: list[Any]) -> list[SDKToolWrapper]:
             # Without this, tools like "bash" cause "conflicts with built-in" error.
             overrides_built_in_tool=True,
             skip_permission=False,  # Amplifier handles permissions at kernel layer
+            # defer intentionally left at its default (None): Amplifier pre-loads
+            # all tools at the kernel layer, so the SDK's lazy tool-search
+            # deferral has no meaning here. None omits the "defer" key from the
+            # wire payload (exact pre-v1.0.2 behavior). Do NOT wire this to a
+            # value unless kernel-side lazy tool loading is added.
+            # Contract: sdk-boundary:ToolForwarding:MUST:2
         )
         result.append(wrapper)
     return result

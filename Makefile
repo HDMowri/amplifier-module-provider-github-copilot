@@ -15,7 +15,7 @@
 #
 # =============================================================================
 
-.PHONY: install test live smoke coverage coverage-check lint format check check-full clean help sdk-assumptions
+.PHONY: install test live smoke coverage coverage-check lint pyright format check check-full clean help sdk-assumptions
 
 # Default Python - override with: make test PYTHON=python3.12
 # Use python3 for Linux/macOS compatibility (Debian/Ubuntu lack 'python' symlink)
@@ -62,7 +62,7 @@ coverage:
 
 # Run tests with coverage and fail if under threshold
 coverage-check:
-	$(PYTHON) -m pytest --cov=$(PACKAGE) --cov-branch --cov-fail-under=90 tests/ -m "not live"
+	$(PYTHON) -m pytest tests/ -m "not live" --cov=$(PACKAGE) --cov-branch --cov-report=term-missing --cov-fail-under=90
 
 # -----------------------------------------------------------------------------
 # Code Quality
@@ -71,6 +71,10 @@ coverage-check:
 # Check code style without modifying
 lint:
 	ruff check $(PACKAGE)/ tests/
+
+# Run pyright over package and tests
+pyright:
+	pyright $(PACKAGE) tests
 
 # Auto-format code
 format:
@@ -114,6 +118,7 @@ help:
 	@echo "  coverage        - Run unit tests with branch coverage report"
 	@echo "  coverage-check  - Run unit tests with 90% threshold enforcement"
 	@echo "  lint            - Check code style"
+	@echo "  pyright         - Run type check over package and tests"
 	@echo "  format          - Auto-format code"
 	@echo "  check           - Run lint + unit tests"
 	@echo "  check-full      - Run lint + coverage with threshold"

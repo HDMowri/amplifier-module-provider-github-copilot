@@ -161,6 +161,20 @@ event_classifications:
     # passed), so this is unreachable; and it carries no domain value. Same
     # disposition as session.extensions_loaded above.
     - session.extensions.attachments_pushed
+    # SDK v1.0.2 — three new SessionEventType enum members. Same disposition as
+    # their sibling lifecycle/canvas events already dropped above; none carry a
+    # kernel domain mapping for this provider's single-completion + tool-call
+    # surface.
+    #   session.todos_changed  — autopilot/objective todo-list telemetry; no UI host.
+    #   session.binary_asset    — inbound binary-result delivery (SessionBinaryAssetData:
+    #                             asset_id/mime_type/byte_length/data/type). DROP + a
+    #                             metadata-only DEBUG tripwire in translate_event; the
+    #                             base64 `data` field is never read or logged.
+    #   session.canvas.closed   — canvas UI lifecycle; Amplifier has no canvas surface
+    #                             (mirrors session.canvas.opened above).
+    - session.todos_changed
+    - session.binary_asset
+    - session.canvas.closed
 
 finish_reason_map:
   # Values MUST be lowercase to match amplifier-core proto:

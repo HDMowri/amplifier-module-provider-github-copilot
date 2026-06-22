@@ -19,7 +19,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -86,7 +85,9 @@ class TestStreamingContext:
 
     def test_initial_state(self) -> None:
         """Fresh context starts with no open block."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         assert ctx.block_index == -1
@@ -96,7 +97,9 @@ class TestStreamingContext:
 
     def test_first_text_delta_opens_block(self) -> None:
         """First text delta emits block_start then block_delta."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="req-abc")
         ctx.handle_delta("Hello", "text")
@@ -110,7 +113,9 @@ class TestStreamingContext:
 
     def test_block_start_payload(self) -> None:
         """block_start payload has request_id, block_index=0, block_type='text'."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.handle_delta("Hi", "text")
@@ -120,7 +125,9 @@ class TestStreamingContext:
 
     def test_delta_payload(self) -> None:
         """stream_block_delta payload has request_id, block_index, sequence, text."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.handle_delta("Hi", "text")
@@ -137,7 +144,9 @@ class TestStreamingContext:
 
     def test_per_block_sequence_increments(self) -> None:
         """Sequence counter increments within a block."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.handle_delta("A", "text")
@@ -155,7 +164,9 @@ class TestStreamingContext:
 
     def test_sequence_resets_on_block_transition(self) -> None:
         """Sequence resets to 0 when a new block starts."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.handle_delta("think", "thinking")   # block 0
@@ -174,7 +185,9 @@ class TestStreamingContext:
 
     def test_thinking_delta_event_name(self) -> None:
         """Thinking deltas use llm:stream_block_delta with block_type='thinking'."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.handle_delta("reasoning...", "thinking")
@@ -190,7 +203,9 @@ class TestStreamingContext:
 
     def test_transition_emits_block_end_then_new_block_start(self) -> None:
         """Transitioning from thinking to text emits block_end, block_start."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.handle_delta("thinking", "thinking")
@@ -213,7 +228,9 @@ class TestStreamingContext:
 
     def test_block_end_payload(self) -> None:
         """block_end payload has request_id, block_index, block_type."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.handle_delta("thinking", "thinking")
@@ -228,7 +245,9 @@ class TestStreamingContext:
 
     def test_close_current_block_emits_block_end(self) -> None:
         """close_current_block() emits block_end for the open block."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.handle_delta("hello", "text")
@@ -243,7 +262,9 @@ class TestStreamingContext:
 
     def test_close_current_block_noop_when_no_open_block(self) -> None:
         """close_current_block() is a no-op when no block is open."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.close_current_block()  # no-op
@@ -251,7 +272,9 @@ class TestStreamingContext:
 
     def test_empty_text_not_queued(self) -> None:
         """Empty text produces no events (contract: empty fragments never emitted)."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r2")
         ctx.handle_delta("", "text")
@@ -259,7 +282,9 @@ class TestStreamingContext:
 
     def test_partial_emitted_flag(self) -> None:
         """partial_emitted becomes True after first block_start."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         assert not ctx.partial_emitted
@@ -268,7 +293,9 @@ class TestStreamingContext:
 
     def test_shared_block_index_across_types(self) -> None:
         """block_index is a single shared space across text and thinking blocks."""
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
 
         ctx = _StreamingContext(request_id="r1")
         ctx.handle_delta("thinking", "thinking")  # block 0
@@ -297,8 +324,8 @@ class TestRunStreamConsumer:
     async def test_consumer_emits_in_order(self) -> None:
         """Consumer emits events in the order they were enqueued."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -324,8 +351,8 @@ class TestRunStreamConsumer:
     async def test_consumer_no_emit_without_coordinator(self) -> None:
         """Consumer drains queue silently when coordinator is None."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         ctx = _StreamingContext(request_id="r1")
@@ -340,8 +367,8 @@ class TestRunStreamConsumer:
     async def test_consumer_handles_emit_error_gracefully(self) -> None:
         """Consumer does not propagate exceptions from coordinator.hooks.emit."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -367,8 +394,8 @@ class TestEventRouterStreamingIntegration:
     async def test_text_delta_queues_block_start_and_delta(self) -> None:
         """SDK text delta -> EventRouter -> block_start, block_delta in context queue."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -388,10 +415,10 @@ class TestEventRouterStreamingIntegration:
 
     @pytest.mark.asyncio
     async def test_thinking_delta_queues_thinking_events(self) -> None:
-        """SDK reasoning delta -> EventRouter -> stream_block_start(thinking), stream_block_delta(thinking)."""
+        """SDK reasoning delta -> EventRouter thinking block_start + block_delta."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -409,17 +436,21 @@ class TestEventRouterStreamingIntegration:
         payloads = _emitted_payloads(coordinator)
         assert "llm:stream_block_delta" in names
         # The delta carries block_type="thinking"
-        thinking_delta = next(p for n, p in zip(names, payloads) if n == "llm:stream_block_delta")
+        thinking_delta = next(
+            p for n, p in zip(names, payloads, strict=True) if n == "llm:stream_block_delta"
+        )
         assert thinking_delta["block_type"] == "thinking"
-        start = next(p for n, p in zip(names, payloads) if n == "llm:stream_block_start")
+        start = next(
+            p for n, p in zip(names, payloads, strict=True) if n == "llm:stream_block_start"
+        )
         assert start["block_type"] == "thinking"
 
     @pytest.mark.asyncio
     async def test_no_llm_content_block_emitted(self) -> None:
         """OLD llm:content_block must NOT be emitted anywhere in the new path."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -442,8 +473,8 @@ class TestEventRouterStreamingIntegration:
     async def test_block_start_before_delta_ordering(self) -> None:
         """block_start is always first among events for a block."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -469,8 +500,8 @@ class TestEventRouterStreamingIntegration:
     async def test_per_block_sequence_numbers(self) -> None:
         """Sequence numbers are per-block and 0-based."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -486,15 +517,17 @@ class TestEventRouterStreamingIntegration:
 
         payloads = _emitted_payloads(coordinator)
         names = _emitted_names(coordinator)
-        delta_payloads = [p for n, p in zip(names, payloads) if n == "llm:stream_block_delta"]
+        delta_payloads = [
+            p for n, p in zip(names, payloads, strict=True) if n == "llm:stream_block_delta"
+        ]
         assert [p["sequence"] for p in delta_payloads] == [0, 1, 2]
 
     @pytest.mark.asyncio
     async def test_single_request_id_all_events(self) -> None:
         """All streaming events for a call share one request_id."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -515,8 +548,8 @@ class TestEventRouterStreamingIntegration:
     async def test_thinking_to_text_transition_full_sequence(self) -> None:
         """Full thinking->text sequence: start/delta/end/start/delta/end."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -540,7 +573,9 @@ class TestEventRouterStreamingIntegration:
             "llm:stream_block_delta",   # text block — block_type="text"
             "llm:stream_block_end",
         ]
-        deltas = [(n, p) for n, p in zip(names, payloads) if n == "llm:stream_block_delta"]
+        deltas = [
+            (n, p) for n, p in zip(names, payloads, strict=True) if n == "llm:stream_block_delta"
+        ]
         assert deltas[0][1]["block_type"] == "thinking"
         assert deltas[1][1]["block_type"] == "text"
 
@@ -557,8 +592,8 @@ class TestStreamAborted:
     async def test_aborted_after_partial_emit(self) -> None:
         """stream_aborted emitted when partial_emitted=True and error occurs."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -580,7 +615,7 @@ class TestStreamAborted:
         assert "llm:stream_aborted" in names
 
         payloads = _emitted_payloads(coordinator)
-        aborted = next(p for n, p in zip(names, payloads) if n == "llm:stream_aborted")
+        aborted = next(p for n, p in zip(names, payloads, strict=True) if n == "llm:stream_aborted")
         assert aborted["request_id"] == "r1"
         assert aborted["error"]["type"] == "RuntimeError"
         assert "sdk failed" in aborted["error"]["msg"]
@@ -589,8 +624,8 @@ class TestStreamAborted:
     async def test_no_aborted_without_partial_emit(self) -> None:
         """stream_aborted NOT emitted when partial_emitted=False."""
         from amplifier_module_provider_github_copilot.provider import (  # type: ignore[attr-defined]
-            _StreamingContext,
             _run_stream_consumer,
+            _StreamingContext,
         )
 
         coordinator = _make_coordinator()
@@ -622,7 +657,9 @@ class TestNonStreamingPath:
     def test_no_stream_events_when_stream_ctx_is_none(self) -> None:
         """EventRouter with stream_ctx=None does not queue any stream events."""
         from amplifier_module_provider_github_copilot.event_router import EventRouter
-        from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import ToolCaptureHandler
+        from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
+            ToolCaptureHandler,
+        )
         from amplifier_module_provider_github_copilot.streaming import EventConfig
 
         event_config = EventConfig(
@@ -631,8 +668,6 @@ class TestNonStreamingPath:
             idle_event_types={"session.idle"},
             error_event_types={"session.error"},
         )
-
-        captured_emits: list[Any] = []
 
         router = EventRouter(
             queue=asyncio.Queue(maxsize=256),

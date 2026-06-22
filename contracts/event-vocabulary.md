@@ -1,10 +1,11 @@
 # Contract: Event Vocabulary
 
 ## Version
-- **Current:** 1.3
+- **Current:** 1.4
 - **Module Reference:** amplifier_module_provider_github_copilot/streaming.py
 - **Correction:** 2026-03-15 — Removed erroneous `src/` prefix
 - **Amendment:** 2026-04-13 — Added Bridge:MUST:3 (BRIDGE event data flattening requirement)
+- **Amendment:** 2026-06-21 — SDK v1.0.2 added three `session.*` events (`session.todos_changed`, `session.binary_asset`, `session.canvas.closed`), all DROP. Added `Drop:MUST:3`: `session.binary_asset` carries a base64 `data` payload and emits a metadata-only (`asset_id`/`mime_type`/`byte_length`) DEBUG tripwire in `translate_event` — the implementation MUST NOT read the `data` bytes nor log/serialize the whole payload (enforced by `tests/test_event_classifications.py::TestBinaryAssetTripwire`).
 - **Config:** amplifier_module_provider_github_copilot/config/events.yaml
 - **Status:** Specification
 
@@ -71,6 +72,9 @@ Events ignored entirely. The authoritative list is `config/events.yaml`; this ta
 | `session.compaction.*` | Internal optimization |
 | `session.custom_agents_updated` | SDK v0.2.1+ session-state notification; no domain value |
 | `session.skills_loaded` | SDK SessionSkillsLoadedEvent; Amplifier does not host skills; no domain value |
+| `session.todos_changed` | SDK v1.0.2 SessionTodosChangedData; signal-only, no payload; Amplifier owns task state |
+| `session.binary_asset` | SDK v1.0.2 SessionBinaryAssetData; carries base64 `data` bytes; structurally unreachable under MinimalMode + deny-destroy (zero tools execute). DROP + metadata-only DEBUG tripwire (Drop:MUST:3) — never read the `data` field |
+| `session.canvas.closed` | SDK v1.0.2 canvas-close notification (3 IDs only); canvas disabled — sibling `session.canvas.opened` already DROP |
 | `system.message` | SDK SystemMessageEvent; carries system/developer prompt text; not forwarded |
 
 ---
@@ -302,6 +306,7 @@ finish_reason_map:
 |--------|--------|
 | `event-vocabulary:Drop:MUST:1` | DROP events ignored |
 | `event-vocabulary:Drop:MUST:2` | New session.* events from CLI binary version-skew added to DROP in events.yaml; MUST NOT produce warning log |
+| `event-vocabulary:Drop:MUST:3` | `session.binary_asset` emits a metadata-only (asset_id/mime_type/byte_length) DEBUG tripwire in `translate_event`; the implementation MUST NOT access the base64 `data` field and MUST NOT log/serialize the whole payload object — enforced by `tests/test_event_classifications.py::TestBinaryAssetTripwire` (drops+metadata-only, never-logged, AND never-read fail-closed) |
 
 ### FinishReason
 
