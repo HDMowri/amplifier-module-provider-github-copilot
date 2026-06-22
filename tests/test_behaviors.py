@@ -453,8 +453,9 @@ class TestSdkVersionFloorMatchesSymbolRequirements:
     def test_accepts_b10_and_above(self) -> None:
         """sdk-boundary:Membrane:MUST:5 — b10 and forward all satisfy the floor.
 
-        b10 is the lower bound (introduction of MinimalMode MUST:7-15 kwargs)
-        and also the pyproject pin; final 1.0.0 (post-beta) and onward must pass.
+        b10 is the symbol-availability floor (introduction of MinimalMode
+        MUST:7-15 kwargs); the pyproject pin is 1.0.2. b10 and every later
+        release must satisfy the floor.
         """
         from amplifier_module_provider_github_copilot import (
             _check_sdk_version,  # type: ignore[reportPrivateUsage]
@@ -472,15 +473,27 @@ class TestSdkVersionFloorMatchesSymbolRequirements:
         Re-asserting the contract locally guards against future refactors
         that satisfy this class but break those.
         """
+        import tomllib
+        from pathlib import Path
+
         from amplifier_module_provider_github_copilot import (
             _check_sdk_version,  # type: ignore[reportPrivateUsage]
         )
+
+        # Derive the pinned version from pyproject.toml rather than hardcoding it,
+        # so the next SDK pin bump updates this anchor automatically instead of
+        # silently asserting a stale literal.
+        pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
+        with open(pyproject_path, "rb") as f:
+            deps: list[str] = tomllib.load(f)["project"]["dependencies"]
+        sdk_req = next(d for d in deps if d.startswith("github-copilot-sdk"))
+        pinned = sdk_req.split("==", 1)[1]
 
         with pytest.raises(ImportError) as exc_info:
             _check_sdk_version("1.0.0b6")
         msg = str(exc_info.value)
         assert "github-copilot-sdk" in msg
-        assert "pip install 'github-copilot-sdk==1.0.0'" in msg
+        assert f"pip install 'github-copilot-sdk=={pinned}'" in msg
         assert "amplifier provider install" in msg
 
 

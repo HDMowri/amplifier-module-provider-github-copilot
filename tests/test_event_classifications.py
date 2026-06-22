@@ -19,6 +19,7 @@ rather than silently skip.
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 import pytest
 
@@ -26,6 +27,7 @@ from amplifier_module_provider_github_copilot.streaming import (
     EventClassification,
     classify_event,
     load_event_config,
+    translate_event,
 )
 
 # ----------------------------------------------------------------------------
@@ -166,6 +168,15 @@ class TestExplicitDropEntriesEmitNoUnknownWarning:
             "session.mcp_servers_loaded",
             "session.mcp_server_status_changed",
             "session.remote_steerable_changed",
+            # SDK v1.0.2 enum members added to the events.yaml DROP block.
+            # todos_changed is signal-only (no payload);
+            # canvas.closed carries only IDs (canvas surface disabled);
+            # binary_asset carries canonical bytes but is structurally
+            # unreachable under MinimalMode + deny-destroy (see the dedicated
+            # tripwire test below).
+            "session.todos_changed",
+            "session.binary_asset",
+            "session.canvas.closed",
         ],
     )
     def test_sdk_030_event_types_classified_without_warning(
@@ -206,3 +217,272 @@ class TestExplicitDropEntriesEmitNoUnknownWarning:
         assert not any("Unknown SDK event type" in rec.message for rec in caplog.records), (
             f"{event_type!r} fell through to unknown-event warning"
         )
+
+
+class TestBinaryAssetTripwire:
+    """``session.binary_asset`` is a classified DROP that ALSO emits a
+    metadata-only DEBUG tripwire in ``translate_event``.
+
+    ``session.binary_asset`` is the one DROP-classified event that carries
+    actual binary bytes (its ``data`` field — base64). The SDK persists it when
+    a TOOL returns binary results for the LLM (``binaryResultsForLlm``). Under
+    MinimalMode + deny-destroy the SDK executes no tools (``ToolCaptureHandler``
+    aborts at the tool-REQUEST boundary), so this event is structurally
+    unreachable. It stays DROP, but if it EVER fires an isolation invariant has
+    broken — so the provider records a metadata-only tripwire (asset_id,
+    mime_type, byte_length) and NEVER reads or logs the base64 ``data`` bytes.
+
+    Contract anchors:
+    - event-vocabulary:Classification:MUST:1
+    - event-vocabulary:Drop:MUST:2
+    - event-vocabulary:Drop:MUST:3
+    """
+
+    def test_binary_asset_drops_and_emits_metadata_only_tripwire(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        config = load_event_config()
+        # A distinctive fake base64 payload that MUST NOT appear in any log.
+        secret_bytes = "QUJD" + "U0VDUkVUQllURVM" * 64
+        sdk_event = {
+            "type": "session.binary_asset",
+            "data": {
+                "asset_id": "asset-deadbeef",
+                "mime_type": "image/png",
+                "byte_length": 4096,
+                "data": secret_bytes,
+                "type": "image",
+            },
+        }
+        with caplog.at_level(
+            logging.DEBUG,
+            logger="amplifier_module_provider_github_copilot.streaming",
+        ):
+            result = translate_event(sdk_event, config)
+
+        # Classified DROP => no domain event forwarded.
+        assert result is None, (
+            "session.binary_asset must DROP (translate_event returns None); a "
+            "non-None result means it was forwarded as BRIDGE/CONSUME."
+        )
+
+        # The metadata-only tripwire fired at DEBUG.
+        tripwire = [r for r in caplog.records if "binary-asset tripwire" in r.getMessage()]
+        assert tripwire, "binary_asset DEBUG tripwire line was not emitted"
+        msg = tripwire[0].getMessage()
+        assert "asset-deadbeef" in msg
+        assert "image/png" in msg
+        assert "4096" in msg
+
+        # SECURITY ASSERTION: the base64 `data` bytes must NEVER reach any log.
+        assert secret_bytes not in caplog.text, (
+            "binary_asset `data` bytes leaked into the log — the tripwire must "
+            "log metadata ONLY."
+        )
+
+        # The classified DROP must not produce the unknown-event WARNING either.
+        assert not any(
+            "Unknown SDK event type" in rec.message for rec in caplog.records
+        ), "session.binary_asset fell through to the unknown-event warning path"
+
+    def test_binary_asset_tripwire_never_reads_data_bytes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Fail-closed proof that the tripwire NEVER touches the ``data`` field.
+
+        The earlier test proves the bytes are never *logged*. This one proves
+        they are never *read*: the asset payload raises if its ``data`` member
+        is accessed by ANY route (attribute, item, or ``.get``). ``translate_event``
+        must still classify the event as DROP, emit the metadata tripwire, and
+        return None WITHOUT raising. If the implementation ever reaches for the
+        canonical bytes, this test detonates. Contract: event-vocabulary:Drop:MUST:3.
+        """
+
+        class _DataTrap:
+            """Object payload whose canonical ``data`` is booby-trapped."""
+
+            asset_id = "asset-trap"
+            mime_type = "application/octet-stream"
+            byte_length = 8192
+            type = "resource"
+
+            @property
+            def data(self) -> str:  # pragma: no cover - must never be hit
+                raise AssertionError(
+                    "translate_event read the binary_asset `data` bytes — "
+                    "the tripwire must access metadata fields ONLY."
+                )
+
+        class _DataTrapDict(dict[str, object]):
+            """Dict payload that raises if the ``data`` key is read."""
+
+            def __getitem__(self, key: object) -> object:
+                if key == "data":  # pragma: no cover - must never be hit
+                    raise AssertionError("read binary_asset `data` via __getitem__")
+                return super().__getitem__(cast(str, key))
+
+            def get(self, key: object, default: object = None) -> object:  # type: ignore[override]
+                if key == "data":  # pragma: no cover - must never be hit
+                    raise AssertionError("read binary_asset `data` via .get")
+                return super().get(cast(str, key), default)
+
+            # The production tripwire reads metadata via per-field `.get(field)`
+            # ONLY (streaming._binary_asset_meta) and MUST NEVER enumerate the
+            # asset payload. Bulk access (dict(payload), .values(), .items(),
+            # iteration) is an alternate route to the `data` bytes that the
+            # per-key guards above would miss. Detonate on every enumeration
+            # entry point so the "never reads data" proof is fail-closed across
+            # ALL access shapes, not just keyed reads.
+            def keys(self) -> object:  # type: ignore[override]
+                raise AssertionError(  # pragma: no cover - must never be hit
+                    "enumerated binary_asset payload via .keys()"
+                )
+
+            def values(self) -> object:  # type: ignore[override]
+                raise AssertionError(  # pragma: no cover - must never be hit
+                    "enumerated binary_asset payload via .values()"
+                )
+
+            def items(self) -> object:  # type: ignore[override]
+                raise AssertionError(  # pragma: no cover - must never be hit
+                    "enumerated binary_asset payload via .items()"
+                )
+
+            def __iter__(self) -> object:  # type: ignore[override]
+                raise AssertionError(  # pragma: no cover - must never be hit
+                    "iterated binary_asset payload via __iter__"
+                )
+
+        config = load_event_config()
+
+        for payload in (
+            _DataTrap(),
+            _DataTrapDict(
+                {
+                    "asset_id": "asset-trap",
+                    "mime_type": "application/octet-stream",
+                    "byte_length": 8192,
+                    "data": "MUSTNOTBEREAD" * 32,
+                    "type": "resource",
+                }
+            ),
+        ):
+            caplog.clear()
+            with caplog.at_level(
+                logging.DEBUG,
+                logger="amplifier_module_provider_github_copilot.streaming",
+            ):
+                # Must NOT raise — accessing `data` would detonate the trap.
+                result = translate_event(
+                    {"type": "session.binary_asset", "data": payload}, config
+                )
+
+            assert result is None, "binary_asset must still DROP"
+            tripwire = [
+                r for r in caplog.records if "binary-asset tripwire" in r.getMessage()
+            ]
+            assert tripwire, "tripwire did not fire for the data-trap payload"
+            msg = tripwire[0].getMessage()
+            assert "asset-trap" in msg
+            assert "application/octet-stream" in msg
+            assert "8192" in msg
+
+    def test_binary_asset_tripwire_sanitizes_hostile_metadata(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The DEBUG tripwire MUST neutralise hostile metadata before logging.
+
+        ``_sanitize_meta_scalar`` (streaming.py) is the only log-injection guard
+        on the binary_asset path. The other tripwire tests feed CLEAN metadata,
+        so the sanitiser branches are unexercised; this one drives them. It
+        proves three properties at once:
+
+        - control characters (NUL/BEL/ESC/CR/LF) are stripped from every emitted
+          scalar, so a schema-violating ``asset_id`` cannot inject log lines;
+        - a non-string field whose ``__str__`` smuggles an ANSI escape is coerced
+          via ``str()`` and THEN stripped (the escape never survives) — a value
+          the pre-hardening sanitiser would have passed through verbatim;
+        - the base64 ``data`` bytes still never reach any log.
+
+        Contract: event-vocabulary:Drop:MUST:3.
+        """
+        config = load_event_config()
+        secret_bytes = "QUJD" + "U0VDUkVUQllURVM" * 64  # must never appear
+
+        class _HostileStr:
+            """A non-string mime_type whose __str__ tries to inject a log line."""
+
+            def __str__(self) -> str:
+                return "image/\x1b[31mevil\r\nINJECTED"
+
+        sdk_event = {
+            "type": "session.binary_asset",
+            "data": {
+                "asset_id": "ok-\x00\x07\x1b[2Jclean\r\nid",  # control chars
+                "mime_type": _HostileStr(),  # hostile non-str __str__
+                "byte_length": 4096,
+                "data": secret_bytes,
+                "type": "image",
+            },
+        }
+        with caplog.at_level(
+            logging.DEBUG,
+            logger="amplifier_module_provider_github_copilot.streaming",
+        ):
+            result = translate_event(sdk_event, config)
+
+        assert result is None, "binary_asset must still DROP"
+        tripwire = [r for r in caplog.records if "binary-asset tripwire" in r.getMessage()]
+        assert tripwire, "tripwire did not fire"
+        line = tripwire[0].getMessage()
+
+        # No control character may survive sanitisation into the emitted line —
+        # these are the log-injection vectors.
+        for ctrl in ("\x00", "\x07", "\x1b", "\r", "\n"):
+            assert ctrl not in line, f"control char {ctrl!r} survived sanitisation"
+
+        # The printable residue of the sanitised scalars is still present...
+        assert "cleanid" in line  # asset_id printable chars, CR/LF stripped
+        assert "INJECTED" in line  # hostile __str__ was coerced, not executed
+        # ...but the raw ANSI escape sequence is gone (only the ESC byte is a
+        # control char; stripping it disarms the sequence).
+        assert "\x1b[31m" not in line
+
+        # SECURITY ASSERTION: the base64 `data` bytes must NEVER reach any log.
+        assert secret_bytes not in caplog.text
+
+    def test_binary_asset_tripwire_truncates_overlong_scalar(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Metadata scalars longer than the cap MUST be truncated, not logged whole.
+
+        A schema-violating emitter could supply a megabyte ``asset_id`` to bloat
+        the log; the sanitiser caps it at ``_META_SCALAR_MAX_LEN`` with an
+        explicit ``...(truncated)`` marker. Contract: event-vocabulary:Drop:MUST:3.
+        """
+        config = load_event_config()
+        long_id = "Z" * 400  # exceeds _META_SCALAR_MAX_LEN (256)
+        sdk_event = {
+            "type": "session.binary_asset",
+            "data": {
+                "asset_id": long_id,
+                "mime_type": "image/png",
+                "byte_length": 1,
+                "data": "QUJD",
+                "type": "image",
+            },
+        }
+        with caplog.at_level(
+            logging.DEBUG,
+            logger="amplifier_module_provider_github_copilot.streaming",
+        ):
+            translate_event(sdk_event, config)
+
+        line = next(
+            r.getMessage()
+            for r in caplog.records
+            if "binary-asset tripwire" in r.getMessage()
+        )
+        assert "...(truncated)" in line, "overlong asset_id was not truncated"
+        assert long_id not in line, "full overlong asset_id leaked into the log"
+

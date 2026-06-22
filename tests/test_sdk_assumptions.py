@@ -102,6 +102,13 @@ class TestSDKImportAssumptions:
                 "embedding_cache_storage",
                 "enable_session_telemetry",
                 "mcp_oauth_token_storage",
+                # v1.0.2 MinimalMode:MUST:16 — the mode-gated `memory` pin,
+                # forwarded by _minimal_mode_session_config() alongside the
+                # MUST:7-15 pins above. create_session declares it as
+                # `memory: MemoryConfiguration | None` (v1.0.2 client.py:1612);
+                # pinning it here makes a future SDK rename/removal FAIL at this
+                # signature guard instead of silently escaping to live/prod.
+                "memory",
             }
         )
 
@@ -799,3 +806,91 @@ class TestCopilotSessionSendSignaturePin:
             f"CopilotSession.send grew a **kwargs parameter: {var_keyword!r}. "
             f"This breaks the named-kwarg pin and would hide drift."
         )
+
+
+@pytest.mark.sdk_assumption
+class TestSDKToolWrapperCoversSDKToolSurface:
+    """``SDKToolWrapper`` MUST structurally cover the real SDK tool object.
+
+    The provider does NOT subclass the SDK's ``copilot.tools.Tool``; it
+    duck-types a frozen ``SDKToolWrapper`` and hands instances to
+    ``create_session(tools=...)``. The SDK then reads attributes off each
+    object when building the tool wire-definitions (``copilot/client.py``)
+    and when registering handlers (``copilot/session.py``). If the SDK's
+    ``Tool`` dataclass grows a field that those code paths read, a wrapper
+    that lacks it raises ``AttributeError`` at runtime on every
+    tool-forwarding turn — exactly the v1.0.2 ``tool.defer`` regression, missed
+    by the mocked unit and tool-less live smoke suites and surfaced only by an
+    E2E that exercises the real tool-definition build path.
+
+    This guard makes the REAL SDK ``Tool`` dataclass the source of truth: the
+    field read-set is derived from the live SDK, not hand-written in the test
+    body, so a FUTURE SDK tool-field addition fails RED here (before E2E),
+    forcing a conscious decision to forward it (add the field to the wrapper)
+    or to record a reasoned not-forwarded deferral.
+
+    Contract: sdk-boundary:ToolForwarding:MUST:2
+    """
+
+    def test_wrapper_covers_sdk_tool_read_surface(self, sdk_module: Any) -> None:
+        import dataclasses
+
+        from amplifier_module_provider_github_copilot.sdk_adapter.types import (
+            SDKToolWrapper,
+        )
+
+        sdk_tool = sdk_module.tools.Tool
+        assert dataclasses.is_dataclass(sdk_tool), (
+            "copilot.tools.Tool is no longer a dataclass; this guard introspects "
+            "its fields to mirror the SDK's tool read surface. Re-derive the "
+            "wrapper coverage check against the new Tool definition."
+        )
+
+        sdk_fields = {f.name for f in dataclasses.fields(sdk_tool)}
+        wrapper_fields = {f.name for f in dataclasses.fields(SDKToolWrapper)}
+
+        # Explicit, reasoned deferrals: SDK ``Tool`` fields the provider has
+        # consciously chosen NOT to mirror on the wrapper. Empty today — the
+        # wrapper covers the SDK's entire field surface. Each future entry, if
+        # added, MUST cite why the provider's tool-forwarding path never reads
+        # that attribute (mirrors the deferral allowlist pattern in
+        # test_sdk_boundary_contract.test_no_unpinned_sdk_mode_gated_capability).
+        deferred: dict[str, str] = {}
+
+        # Stale-allowlist hygiene: a deferral for a field the SDK has since
+        # removed must not rot silently.
+        assert set(deferred) <= sdk_fields, (
+            f"Stale tool-field deferral allowlist entries no longer on the SDK "
+            f"copilot.tools.Tool: {sorted(set(deferred) - sdk_fields)}. Remove "
+            f"them from `deferred`."
+        )
+
+        missing = sdk_fields - wrapper_fields - set(deferred)
+        assert not missing, (
+            f"SDKToolWrapper is missing SDK tool field(s): {sorted(missing)}.\n"
+            f"  SDK copilot.tools.Tool fields: {sorted(sdk_fields)}\n"
+            f"  SDKToolWrapper fields:         {sorted(wrapper_fields)}\n"
+            f"The SDK reads these attributes off each tool object when building "
+            f"tool definitions (copilot/client.py) and registering handlers "
+            f"(copilot/session.py). A wrapper missing any of them raises "
+            f"AttributeError on every tool-forwarding turn (this is exactly how "
+            f"the v1.0.2 `defer` field broke the provider). Either add the field "
+            f"to SDKToolWrapper in sdk_adapter/types.py (default = SDK-parity "
+            f"value, i.e. the one that reproduces pre-upgrade wire behavior) and "
+            f"update contracts/sdk-boundary.md ToolForwarding, OR add an explicit "
+            f"reasoned entry to `deferred` explaining why the forwarding path "
+            f"never reads it."
+        )
+
+        # Belt-and-suspenders: the SDK could expose a read attribute via a
+        # ``property`` rather than a dataclass field, which ``fields()`` would
+        # not see. Assert a constructed wrapper instance actually answers every
+        # SDK field name via attribute access (the real failure mode is an
+        # AttributeError on getattr, not a missing dataclass field).
+        instance = SDKToolWrapper(name="probe", description="probe")
+        for field_name in sdk_fields - set(deferred):
+            assert hasattr(instance, field_name), (
+                f"SDKToolWrapper instance has no attribute {field_name!r} that "
+                f"the SDK reads off tool objects; getattr would raise "
+                f"AttributeError on a tool-forwarding turn."
+            )

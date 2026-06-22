@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-provider-github-copilot"
-version = "2.3.0"
+version = "2.4.0"
 description = "GitHub Copilot provider for Amplifier - Two-Medium Architecture"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,7 +31,15 @@ dependencies = [
     #   one new SessionEventType (session.extensions.attachments_pushed)
     # - v1.0.0 (GA): byte-identical Python source to b12 (bundled CLI 1.0.57);
     #   stable release stamp — no API or behavior change vs b12
-    "github-copilot-sdk==1.0.0",
+    # - v1.0.1 / v1.0.2: NON-BREAKING for our 4 SDK imports — top-level `copilot`
+    #   exports `ModelCapabilitiesOverride`, `ModelLimitsOverride`,
+    #   `PermissionRequestResult`; `PermissionDecisionReject` lives in
+    #   `copilot.generated.rpc` (guarded boundary carve-out, ImportQuarantine:MUST:7).
+    #   None were removed or renamed across GA -> 1.0.1 -> 1.0.2.
+    #   v1.0.2 adds graceful runtime shutdown on CopilotClient.stop() (bounded by
+    #   _RUNTIME_SHUTDOWN_TIMEOUT_SECONDS) — lands on the once-per-lifecycle close()
+    #   path, not the per-turn session disconnect path.
+    "github-copilot-sdk==1.0.2",
     # PyYAML for config loading
     "pyyaml>=6.0",
     # PEP 440 version parser used by the import-time SDK floor check
@@ -94,23 +102,11 @@ select = [
     "UP",    # pyupgrade
 ]
 
-[tool.pyright]
-pythonVersion = "3.11"
-typeCheckingMode = "strict"
-include = ["amplifier_module_provider_github_copilot", "tests"]
-exclude = ["run_*.py"]
-# Custom type stubs for external packages (copilot SDK, amplifier-core)
-stubPath = "typings"
-# Use local venv for package resolution
-venvPath = "."
-venv = ".venv"
-# Exclude stub-related errors for pytest (has inline types but pyright strict mode is pedantic)
-reportMissingTypeStubs = false
-# amplifier_core and copilot SDK are runtime-only packages (live in the amplifier uv tool,
-# not in the dev venv). Their types are fully covered by typings/ stub files.
-# reportMissingModuleSource fires when stubs exist but source is absent from the dev venv —
-# correct pyright setting for intentional runtime-only packages with hand-written stubs.
-reportMissingModuleSource = "none"
+# Type checking (pyright) is configured in the standalone `pyrightconfig.json`
+# at the repo root — REQUIRED by the QualityGates tests
+# (tests/test_test_quality.py::TestQualityGates) and used by `make pyright`.
+# pyright honors pyrightconfig.json over [tool.pyright], so the config lives
+# there as the single source of truth to avoid silent drift between the two.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

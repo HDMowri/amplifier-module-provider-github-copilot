@@ -1,11 +1,17 @@
 # Contract: SDK Boundary (The Membrane)
 
 ## Version
-- **Current:** 1.10 (SDK v1.0.0b10 — MinimalMode extended to MUST:1-15 with 9 defense-in-depth session-capability pins)
+- **Current:** 1.13 (SDK v1.0.2 — Client Lifecycle annotated with the observed bounded ~12s graceful-shutdown teardown cost from the real-world E2E)
 - **Module Reference:** amplifier_module_provider_github_copilot/sdk_adapter/
 - **Status:** Non-Negotiable Constraint
-- **Update:** 2026-06-01 — MinimalMode extended from MUST:1-6 to MUST:1-15. b10 added 8 new `create_session` kwargs gating SDK-internal capabilities (session store, skills loader, file hooks, host git, on-demand instruction discovery, embedding retrieval, embedding cache storage, MCP OAuth token storage), plus the pre-existing b9 `enable_session_telemetry` consolidated here. Helpers at b10 `_mode.py:185-258` only collapse `None` to defaults when `mode == "empty"`; our adapter ships `mode="copilot-cli"` (`sdk_adapter/client.py:419-424`), so leaving any kwarg unset hands control to the bundled CLI. Explicit pin is a real wire-shape change, not intent-pinning. v1.10 pins the 9th mode-gated default (`mcp_oauth_token_storage`) and corrects the v1.9 claim that `mcp_servers={}` foreclosed its wire-emit — it does not; the emit is independent at b10 `client.py:1863-1865`. v1.8 SDKSurface clauses verified byte-compatible against b10 — no production source change beyond the 9 MinimalMode emits.
+- **Update:** 2026-06-21 — Client Lifecycle annotated with the v1.0.2 graceful-shutdown teardown-latency observation. A real-world WSL E2E probe of the provider's `close()`→SDK `stop()` path shows a clean teardown takes ~12s ONCE PER LIFECYCLE: the graceful runtime-shutdown RPC acks in <1s (`client.py:1455` success branch, not `:1462` fail), then the drained CLI process does not self-exit so the bounded `wait(timeout=10)` (`client.py:1491-1496`) elapses and `terminate()` (`:1498`) reaps it — bounded, deterministic, zero orphans, no SIGKILL, NOT per-turn (runtime reused across turns). SDK-owned behavior; provider only calls `stop()`. No source change.
+- **Update (v1.12):** 2026-06-21 — ToolForwarding hardened for v1.0.2. The SDK's `copilot.tools.Tool` gained a `defer: Literal["auto","never"] | None` field (installed v1.0.2 `tools.py:65`); the SDK reads it when building tool wire-definitions (`client.py:1810-1811` and `:2391-2392`: `if tool.defer is not None: definition["defer"] = tool.defer`). The provider's duck-typed `SDKToolWrapper` lacked it, so every tool-forwarding turn raised `AttributeError: 'SDKToolWrapper' object has no attribute 'defer'` — a real production blocker not reached by the mocked unit suite or the tool-less live smoke suite (neither exercises the real tool-definition builder). `SDKToolWrapper.defer` added, defaulting to `None` (omits the wire key = byte-identical pre-v1.0.2 payload); Amplifier pre-loads all tools at the kernel layer, so the SDK's lazy tool-search deferral stays off. A new Tier-6 structural guard introspects the real `copilot.tools.Tool` field set against the wrapper so a FUTURE SDK tool-field addition fails RED before E2E.
+- **Update (v1.11):** 2026-06-21 — SDK bumped b10 → v1.0.2 (GA, 1.0.1, 1.0.2). MinimalMode extended from MUST:1-15 to MUST:1-16: v1.0.2 adds a mode-gated `memory` session capability whose empty-mode default helper `_memory_default` (installed v1.0.2 `_mode.py:264-276`) returns `{"enabled": False}` only when `mode == "empty"`; our adapter ships `mode="copilot-cli"`, so leaving `memory` unset hands session-memory control to the bundled CLI. Pinned to `{"enabled": False}` (MUST:16). The b10→v1.0.2 span is non-breaking per the SDK diff analysis + freeze-diff battery: the only production wire-shape change is the `memory` emit plus three config-driven event drops (see event-vocabulary 1.4). v1.0.2 also lands a graceful runtime shutdown on the once-per-lifecycle `stop()` path, bounded by `_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS=10` (NOT per-turn).
+- **Update (v1.10):** 2026-06-01 — MinimalMode extended from MUST:1-6 to MUST:1-15. b10 added 8 new `create_session` kwargs gating SDK-internal capabilities (session store, skills loader, file hooks, host git, on-demand instruction discovery, embedding retrieval, embedding cache storage, MCP OAuth token storage), plus the pre-existing b9 `enable_session_telemetry` consolidated here. Helpers at b10 `_mode.py:185-258` only collapse `None` to defaults when `mode == "empty"`; our adapter ships `mode="copilot-cli"` (`sdk_adapter/client.py:419-424`), so leaving any kwarg unset hands control to the bundled CLI. Explicit pin is a real wire-shape change, not intent-pinning. v1.10 pins the 9th mode-gated default (`mcp_oauth_token_storage`) and corrects the v1.9 claim that `mcp_servers={}` foreclosed its wire-emit — it does not; the emit is independent at b10 `client.py:1863-1865`. v1.8 SDKSurface clauses verified byte-compatible against b10 — no production source change beyond the 9 MinimalMode emits.
 - **History:**
+  - **1.13** — SDK v1.0.2: Client Lifecycle annotated (no source change) with the observed graceful-shutdown teardown cost from the real-world WSL E2E. Provider `close()`→SDK `stop()` takes ~12s ONCE PER LIFECYCLE: graceful runtime-shutdown RPC acked <1s (`client.py:1455` success branch, `runtime shutdown complete`; the `:1462` fail branch never fires), then the drained CLI process does not self-exit so the bounded `wait(timeout=_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS=10)` (`client.py:1491-1496`) elapses and `terminate()` (`:1498`) reaps it. Bounded, deterministic, zero orphans, no SIGKILL. Runtime reused across turns so the cost is lifecycle-end only, never per-turn. SDK-owned; the provider only invokes `stop()`.
+  - **1.12** — SDK v1.0.2: ToolForwarding:MUST:2 extended — `SDKToolWrapper` gains `defer: Literal["auto","never"] | None = None`, mirroring the SDK's own `copilot.tools.Tool.defer` (installed v1.0.2 `tools.py:65`). The SDK reads `tool.defer` building tool wire-definitions (`client.py:1810-1811`, `:2391-2392`); the duck-typed wrapper lacking it raised `AttributeError` on every tool-forwarding turn — a real blocker not reachable by the mocked unit suite or the tool-less live smoke suite, only by an E2E that exercises the real tool-definition builder. `None` default omits the `"defer"` wire key (byte-identical pre-v1.0.2 payload); Amplifier pre-loads tools at the kernel layer so lazy tool-search deferral has no meaning here. Durable guard added: `tests/test_sdk_assumptions.py::TestSDKToolWrapperCoversSDKToolSurface` introspects the real `Tool` dataclass field set (⊆ wrapper, `require_sdk`-gated, allowlist+hygiene), so a future SDK tool-field addition fails RED before E2E rather than crashing a live turn.
+  - **1.11** — SDK v1.0.2: MinimalMode:MUST:16 added — `memory={"enabled": False}`, the 10th SDK mode-gated capability default. Identical in mode-gating pattern to MUST:13/MUST:15: under `mode="copilot-cli"` the helper `_memory_default` (installed v1.0.2 `_mode.py:264-276`) returns its empty-mode value ONLY when `mode == "empty"`, so the bundled-CLI default applies unless pinned. The empty-mode value is a dict `{"enabled": False}` (as in MUST:1's `infinite_sessions`, NOT the `"in-memory"` string of MUST:13/15). Pinned to mirror the SDK's own empty-mode default; Amplifier owns all context/memory and runs ephemeral per-`complete()` sessions (deny-destroy). The b10→v1.0.2 span (GA, 1.0.1, 1.0.2) is non-breaking per the SDK diff analysis + freeze-diff battery; the sole production wire-shape change is the `memory` emit (plus three config-driven event drops, event-vocabulary 1.4). v1.0.2 shifted the `_mode.py` line ranges, so MUST:16's offsets are version-tagged and not contiguous with the b10 block.
   - **1.10** — SDK v1.0.0b10: MinimalMode:MUST:15 added — `mcp_oauth_token_storage="in-memory"`, the 9th and final SDK mode-gated capability default. Corrects the v1.9 rationale that scoped this switch out: the `mcpOAuthTokenStorage` wire-emit (b10 `client.py:1863-1865`) is an INDEPENDENT `if mcp_oauth_token_storage is not None` block, NOT gated by the `mcpServers` emit (b10 `client.py:1860-1861`), so `mcp_servers={}` (MUST:3) does not foreclose it. Under `mode="copilot-cli"` the helper `_mcp_oauth_token_storage_default` (b10 `_mode.py:251-258`) returns `None` — byte-identical in shape to `_embedding_cache_storage_default` (b10 `_mode.py:201-208`, MUST:13) — so the bundled-CLI default applies unless pinned. Pinned `"in-memory"` to mirror the SDK's own empty-mode default and MUST:13. The only reason there was no live exposure at v1.9 is one level up (no MCP servers ⇒ no OAuth flow), a silent coupling now removed. Closure hardened: `test_no_unpinned_sdk_mode_gated_capability` runtime-enumerates the `_mode` mode-gated helpers so a future 10th default fails loudly. `manage_schedule_enabled` / `coauthor_enabled` remain out of scope — see the MinimalMode Out-of-scope subsection.
   - **1.9** — SDK v1.0.0b10: MinimalMode:MUST:7-14 added (`enable_session_store=False`, `enable_skills=False`, `enable_file_hooks=False`, `enable_host_git_operations=False`, `enable_on_demand_instruction_discovery=False`, `skip_embedding_retrieval=True`, `embedding_cache_storage="in-memory"`, `enable_session_telemetry=False`). Mode-mismatch rationale: b10 `_mode.py:175-182` `_empty_mode_bool_default` returns `empty_default` ONLY when `mode == "empty"`; our adapter mode is `copilot-cli`. Wire emit at b10 `client.py:1852-1905` only serializes a kwarg when non-`None`. Sub-clauses recorded in MinimalMode constraint + test-anchor tables. Telemetry is pinned `False` because b10 `client.py:1651-1656` documents telemetry as ON-by-default for GitHub-authenticated sessions (our auth path); leaving the kwarg unset would silently opt the provider in. (`mcp_oauth_token_storage` is addressed separately at v1.10 — see above.)
   - **1.8** — SDK v1.0.0b9: SDKSurface:MUST:6 corrected — `copilot.session.CopilotSession.send` accepts four keyword-only kwargs (`attachments`, `mode`, `agent_mode`, `request_headers`), not three. Anchor: b9 `session.py:L1154-L1160`. Test fixture at `tests/fixtures/sdk_mocks.py:L184-L192` already mirrored this shape; only the contract clause was stale. No production source change.
@@ -323,6 +329,8 @@ for tool in tools:
         definition["overridesBuiltInTool"] = True
     if tool.skip_permission:          # ← MUST exist as attribute
         definition["skipPermission"] = True
+    if tool.defer is not None:        # ← SDK v1.0.2 reads tool.defer (client.py:1810-1811, :2391-2392)
+        definition["defer"] = tool.defer
 ```
 
 **Required attributes on each tool object:**
@@ -332,6 +340,7 @@ for tool in tools:
 - `overrides_built_in_tool: bool` — set to `True` to avoid SDK "conflicts with built-in" error for tools like "bash" (we disable built-ins via available_tools=[] anyway)
 - `skip_permission: bool` — set to `False` (Amplifier handles permissions)
 - `handler: None` — **MUST exist** (SDK checks handler attribute); set to `None` so SDK skips handler registration (Amplifier handles tools at kernel layer)
+- `defer: Literal["auto", "never"] | None` — **MUST exist** (SDK v1.0.2 reads `tool.defer` when building tool definitions); set to `None` so the `defer` key is omitted from the wire payload (exact pre-v1.0.2 behavior). Amplifier pre-loads all tools at the kernel layer, so the SDK's lazy tool-search deferral stays off. Mirrors the SDK's own `copilot.tools.Tool.defer` field.
 
 **Implementation:** Use `SDKToolWrapper` dataclass from `sdk_adapter/types.py`:
 ```python
@@ -344,6 +353,7 @@ class SDKToolWrapper:
     overrides_built_in_tool: bool = False
     skip_permission: bool = False
     handler: Any = None  # SDK checks this; None skips handler registration
+    defer: Literal["auto", "never"] | None = None  # SDK v1.0.2 reads tool.defer; None = not deferred (omitted from wire)
 
 def convert_tools_for_sdk(tools: list[Any]) -> list[SDKToolWrapper]:
     # Handles both ToolSpec objects (attribute access) and dicts
@@ -463,6 +473,7 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | sdk-boundary:MinimalMode:MUST:13 | `embedding_cache_storage` MUST be set to `"in-memory"` | Prevents persistent disk cache of workspace embeddings — aligns with deny-destroy / ephemeral session. Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at b10 `_mode.py:201-208`. |
 | sdk-boundary:MinimalMode:MUST:14 | `enable_session_telemetry` MUST be set to `False` | Disables SDK-internal session telemetry — Amplifier owns observability. Pinned because b10 `client.py:1651-1656` documents telemetry as ON-by-default for GitHub-authenticated sessions and our `COPILOT_AGENT_TOKEN` path IS that path; without pin, leaving kwarg `None` lets the bundled CLI emit telemetry by default. |
 | sdk-boundary:MinimalMode:MUST:15 | `mcp_oauth_token_storage` MUST be set to `"in-memory"` | Keeps MCP OAuth tokens in RAM — no on-disk token residue across the ephemeral session boundary. Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at b10 `_mode.py:251-258`; the wire-emit (b10 `client.py:1863-1865`) is INDEPENDENT of the `mcpServers` emit (`client.py:1860-1861`), so `mcp_servers={}` (MUST:3) does NOT foreclose it. |
+| sdk-boundary:MinimalMode:MUST:16 | `memory` MUST be set to `{"enabled": False}` | Disables the SDK v1.0.2 mode-gated session-memory capability — Amplifier owns all context/memory; aligns with deny-destroy / ephemeral per-`complete()` sessions. Pinned because `mode="copilot-cli"` does not invoke the empty-mode default helper at installed v1.0.2 `_mode.py:264-276` (`_memory_default` returns `{"enabled": False}` only when `mode == "empty"`). |
 
 ### Test Anchors
 
@@ -483,12 +494,15 @@ The dict passed to `client.create_session()` MUST satisfy these constraints:
 | `sdk-boundary:MinimalMode:MUST:13` | embedding cache in-memory | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_embedding_cache_storage_in_memory` |
 | `sdk-boundary:MinimalMode:MUST:14` | session telemetry disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_enable_session_telemetry_disabled` |
 | `sdk-boundary:MinimalMode:MUST:15` | mcp oauth token storage in-memory | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_mcp_oauth_token_storage_in_memory` |
+| `sdk-boundary:MinimalMode:MUST:16` | memory disabled | `tests/test_sdk_boundary_contract.py::TestMinimalModeConfig::test_memory_disabled` |
 
 ### Out of scope (mode-gated defaults not pinned)
 
-The 9 pins above cover every SDK mode-gated capability default reached through
+The 10 pins above cover every SDK mode-gated capability default reached through
 `create_session` — the `_<kwarg>_default(mode, supplied)` helpers in b10
-`_mode.py:185-258`. Two related SDK defaults are deliberately NOT pinned:
+`_mode.py:185-258`, plus v1.0.2's `_memory_default` (`_mode.py:264-276`; v1.0.2
+shifted the `_mode.py` line ranges, so these offsets are version-tagged and not
+contiguous with the b10 block). Two related SDK defaults are deliberately NOT pinned:
 
 - **`manage_schedule_enabled` / `coauthor_enabled`** — these ARE
   `create_session` kwargs (b10 `client.py:1576-1577`) but have no
@@ -756,6 +770,20 @@ This MUST be translated to `InvalidRequestError` (non-retryable) per `error-hier
 | `sdk-boundary:client-lifecycle:MUST:2` | Retry after failure reinitializes CopilotClient |
 | `sdk-boundary:client-lifecycle:MUST:3` | Original exception propagates (not swallowed) |
 | `sdk-boundary:client-lifecycle:REGRESSION` | Successful start retains _owned_client for reuse |
+
+**Teardown latency (v1.0.2 graceful shutdown — observed, SDK-owned).** `close()`
+calls SDK `stop()`, which (v1.0.2) requests a graceful runtime shutdown before
+killing the CLI subprocess. Observed on this exact path: the graceful runtime-shutdown
+RPC is acked in **<1s** (`stop()` logs `runtime shutdown complete`, success
+branch `client.py:1455` — NOT the `failed` branch `:1462`), but the drained CLI
+process does not self-exit, so the bounded post-ack `wait(timeout=_RUNTIME_SHUTDOWN_TIMEOUT_SECONDS=10)`
+(`client.py:1491-1496`) elapses and `terminate()` (`:1498`) reaps it. Net: a clean
+`close()` takes **~12s, once per lifecycle**, bounded and deterministic, with
+**zero orphaned CLI processes** and no `SIGKILL`. The runtime is **reused across
+turns**, so this
+cost is paid only at lifecycle end, never per turn. This is SDK-internal behavior;
+the provider only invokes `stop()`. Consumers wrapping the provider should allow
+≥15s for `close()`.
 
 ---
 

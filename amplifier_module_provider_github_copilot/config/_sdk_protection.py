@@ -26,7 +26,7 @@ __all__ = [
 class MinimalModeConfig:
     """Minimal mode session configuration policy.
 
-    Contract: sdk-boundary:MinimalMode:MUST:1-15
+    Contract: sdk-boundary:MinimalMode:MUST:1-16
 
     Disables SDK features that Amplifier handles, ensuring Amplifier is the sole
     orchestrator. Evidence: 57% wall-clock improvement (12.5s → 5.4s) confirmed
@@ -101,6 +101,17 @@ class MinimalModeConfig:
     # (b10 `_mode.py:251-258`) returns None, so without this pin the bundled-CLI
     # default applies.
     mcp_oauth_token_storage: Literal["persistent", "in-memory"] = "in-memory"
+
+    # MUST:16 — Disable the SDK memory feature; Amplifier owns context and
+    # persistence, and sessions are ephemeral per `complete()` call. Added at
+    # v1.0.2 as a new mode-gated create_session kwarg with empty-mode default
+    # helper `_memory_default` (v1.0.2 `_mode.py:264-276`) that returns
+    # `{"enabled": False}` ONLY when `mode == "empty"`. Our adapter ships
+    # `mode="copilot-cli"`, where the helper returns None and the bundled-CLI
+    # default would otherwise apply — so this explicit pin IS the wire shape.
+    # Value mirrors the SDK empty-mode default exactly (contract:
+    # sdk-boundary:MinimalMode SDK-introspection closure).
+    memory: dict[str, Any] = field(default_factory=lambda: {"enabled": False})
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ in ``pyproject.toml`` — the single tracked source of truth for the SDK pin.
 from __future__ import annotations
 
 import tomllib
+from importlib import import_module
 from importlib.metadata import version as _dist_version_lookup
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,21 @@ def require_sdk() -> Any:
     if dist_version != required:
         pytest.fail(
             f"github-copilot-sdk dist version {dist_version!r} != required {required!r}. "
+            f"Install the pinned SDK: pip install 'github-copilot-sdk=={required}'"
+        )
+
+    # Runtime capability probe: a version string alone can mismatch the
+    # actual runtime; assert the installed SDK truly exposes the mode-gated
+    # ``memory`` capability that MinimalMode MUST:16 pins. Without this, the
+    # memory pin could be a SILENT no-op against an SDK that predates the
+    # feature, yielding a false green. ``_memory_default`` lands at v1.0.2
+    # (``copilot/_mode.py``).
+    mode_mod = import_module("copilot._mode")
+    if not hasattr(mode_mod, "_memory_default"):
+        pytest.fail(
+            "copilot._mode._memory_default is missing: the installed SDK lacks "
+            "the v1.0.2 mode-gated 'memory' capability that MinimalMode MUST:16 "
+            "pins, so the memory pin would be a silent no-op. "
             f"Install the pinned SDK: pip install 'github-copilot-sdk=={required}'"
         )
     return copilot

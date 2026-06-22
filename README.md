@@ -1,6 +1,6 @@
 # Amplifier GitHub Copilot Provider Module
 
-GitHub Copilot SDK integration for Amplifier — provides access to Anthropic and OpenAI models via your GitHub Copilot plan.
+GitHub Copilot SDK integration for Amplifier — provides access to Anthropic, OpenAI, and Google models via your GitHub Copilot plan.
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 ## Purpose
 
-Provides access to Anthropic Claude and OpenAI GPT models as an LLM provider for Amplifier, using the GitHub Copilot SDK. Model availability reflects your GitHub Copilot plan — models are discovered dynamically at runtime.
+Provides access to Anthropic Claude, OpenAI GPT, and Google Gemini models as an LLM provider for Amplifier, using the GitHub Copilot SDK. Model availability reflects your GitHub Copilot plan — models are discovered dynamically at runtime.
 
 ## Authentication
 
@@ -119,7 +119,7 @@ providers:
 amplifier run -p github-copilot
 
 # One-shot prompt
-amplifier run -p github-copilot -m claude-sonnet-4 "Explain this codebase"
+amplifier run -p github-copilot -m claude-sonnet-4.6 "Explain this codebase"
 
 # List available models
 amplifier provider models github-copilot
@@ -127,7 +127,7 @@ amplifier provider models github-copilot
 
 ## Supported Models
 
-Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.0; run `amplifier provider models github-copilot` for the live list.
+Models are discovered dynamically from the SDK at runtime — the list reflects your GitHub Copilot plan. The tables below show the current public set as of SDK 1.0.2; run `amplifier provider models github-copilot` for the live list.
 
 **Routing:**
 
@@ -139,11 +139,11 @@ Models are discovered dynamically from the SDK at runtime — the list reflects 
 
 | Model ID | Context | Max Output | Capabilities |
 | --- | --- | --- | --- |
-| `claude-opus-4.8` | 200k | 32k | streaming, tools, vision, thinking |
-| `claude-opus-4.7` | 200k | 32k | streaming, tools, vision, thinking |
-| `claude-opus-4.6` | 200k | 32k | streaming, tools, vision, thinking |
+| `claude-opus-4.8` | 1M | 64k | streaming, tools, vision, thinking |
+| `claude-opus-4.7` | 1M | 64k | streaming, tools, vision, thinking |
+| `claude-opus-4.6` | 1M | 64k | streaming, tools, vision, thinking |
 | `claude-opus-4.5` | 200k | 32k | streaming, tools, vision |
-| `claude-sonnet-4.6` | 200k | 32k | streaming, tools, vision, thinking |
+| `claude-sonnet-4.6` | 1M | 64k | streaming, tools, vision, thinking |
 | `claude-sonnet-4.5` | 200k | 32k | streaming, tools, vision |
 | `claude-haiku-4.5` | 200k | 64k | streaming, tools, vision |
 
@@ -154,11 +154,21 @@ Models are discovered dynamically from the SDK at runtime — the list reflects 
 | `gpt-5.5` | 1.05M | 128k | streaming, tools, vision, thinking |
 | `gpt-5.4` | 1.05M | 128k | streaming, tools, vision, thinking |
 | `gpt-5.3-codex` | 400k | 128k | streaming, tools, vision, thinking |
-| `gpt-5.2-codex` | 400k | 128k | streaming, tools, vision, thinking |
-| `gpt-5.2` | 400k | 128k | streaming, tools, vision, thinking |
 | `gpt-5.4-mini` | 400k | 128k | streaming, tools, vision, thinking |
 | `gpt-5-mini` | 264k | 136k | streaming, tools, vision, thinking |
-| `gpt-4.1` | 128k | 64k | streaming, tools, vision |
+
+**Google:**
+
+| Model ID | Context | Max Output | Capabilities |
+| --- | --- | --- | --- |
+| `gemini-3.1-pro-preview` | 1M | 64k | streaming, tools, vision, thinking |
+| `gemini-3.5-flash` | 1M | 64k | streaming, tools, vision, thinking |
+
+**MAI:**
+
+| Model ID | Context | Max Output | Capabilities |
+| --- | --- | --- | --- |
+| `mai-code-1-flash-internal` | 256k | 128k | streaming, tools, thinking |
 
 > **Tip:** Want intelligent model selection? Use the [Routing Matrix bundle](https://github.com/microsoft/amplifier-bundle-routing-matrix) to select models by semantic role (`coding`, `reasoning`, `fast`) rather than hardcoding a model ID.
 
@@ -509,7 +519,7 @@ Running `amplifier init` before authentication:
 ## Dependencies
 
 - `amplifier-core` (provided by Amplifier runtime, not installed separately)
-- `github-copilot-sdk==1.0.0`
+- `github-copilot-sdk==1.0.2`
 - `pyyaml>=6.0`
 
 > **Note:** `github-copilot-sdk` is installed automatically when you install or initialize

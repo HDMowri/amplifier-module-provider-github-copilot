@@ -796,12 +796,80 @@ def extract_response_content(response: Any, _depth: int = 0) -> str:
     return ""
 
 
+_BINARY_ASSET_META_FIELDS = ("asset_id", "mime_type", "byte_length")
+_META_SCALAR_MAX_LEN = 256
+
+
+def _binary_asset_meta(asset: object, key: str) -> object:
+    """Read a single metadata field from a session.binary_asset payload.
+
+    Returns ONLY scalar metadata (asset_id / mime_type / byte_length). The
+    canonical binary `data` field is NEVER read here — callers pass only keys
+    from ``_BINARY_ASSET_META_FIELDS``. Tolerates both dict and object payload
+    shapes; missing fields yield None.
+    """
+    if isinstance(asset, dict):
+        return cast("dict[str, object]", asset).get(key)
+    return getattr(asset, key, None)
+
+
+def _sanitize_meta_scalar(value: object) -> object:
+    """Neutralise a binary-asset metadata scalar before DEBUG logging.
+
+    Strips non-printable/control characters and caps length to foreclose any
+    log-injection vector if an upstream emitter violates the metadata schema.
+
+    ``None`` and real numeric scalars (``int`` ``byte_length``, ``float``)
+    carry no control characters and pass through unchanged. ANY other non-string
+    object is coerced via ``str()`` and THEN sanitised — so a schema-violating
+    payload whose ``__str__`` tries to smuggle control bytes through the ``%s``
+    log format cannot inject (the coerced text is stripped + capped exactly like
+    a raw string). The base64 ``data`` field is never routed here.
+    """
+    if value is None or (isinstance(value, (int, float)) and not isinstance(value, bool)):
+        return value
+    text = value if isinstance(value, str) else str(value)
+    cleaned = "".join(ch for ch in text if ch.isprintable())
+    if len(cleaned) > _META_SCALAR_MAX_LEN:
+        cleaned = cleaned[:_META_SCALAR_MAX_LEN] + "...(truncated)"
+    return cleaned
+
+
 def translate_event(sdk_event: dict[str, Any], config: EventConfig) -> DomainEvent | None:
     """Translate SDK event to domain event. Contract: event-vocabulary.md."""
     raw_type = sdk_event.get("type", "")
     # Handle both enum objects and strings (SDK uses enums, tests may use strings)
     event_type: str = raw_type.value if hasattr(raw_type, "value") else str(raw_type)
     classification = classify_event(event_type, config)
+
+    # Security tripwire — Contract: event-vocabulary.md (session.binary_asset).
+    # session.binary_asset carries canonical binary bytes (its `data` field) that
+    # the SDK runtime persists when a TOOL returns binary results for the LLM
+    # (binaryResultsForLlm). Under MinimalMode + deny-destroy the SDK executes no
+    # tools (ToolCaptureHandler aborts at the tool-REQUEST boundary), so this
+    # event is structurally unreachable. It stays a classified DROP. If it EVER
+    # fires, an isolation invariant has broken: record METADATA ONLY as a
+    # fail-closed forensic breadcrumb (surfaced only when DEBUG logging is
+    # enabled — the contract pins this tripwire at DEBUG, not WARNING). The full
+    # SDK SessionBinaryAssetData payload also carries `type` (BinaryAssetType)
+    # and optional `description`/`metadata`; the tripwire INTENTIONALLY reads
+    # none of them — only the scalar keys in _BINARY_ASSET_META_FIELDS — and the
+    # base64 `data` field is NEVER read or logged. Each emitted scalar is
+    # sanitized (control-char strip + length cap + hostile-__str__ coercion)
+    # before emission. (Drop:MUST:3)
+    if event_type == "session.binary_asset":
+        asset: object = sdk_event.get("data")
+        _meta = {
+            key: _sanitize_meta_scalar(_binary_asset_meta(asset, key))
+            for key in _BINARY_ASSET_META_FIELDS
+        }
+        logger.debug(
+            "[STREAMING] binary-asset tripwire (dropped, unreachable path): "
+            "asset_id=%s mime_type=%s byte_length=%s",
+            _meta["asset_id"],
+            _meta["mime_type"],
+            _meta["byte_length"],
+        )
 
     if classification != EventClassification.BRIDGE:
         return None

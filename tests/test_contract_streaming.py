@@ -605,7 +605,9 @@ class TestThinkingDeltaNotEmittedPerToken:
         import asyncio
 
         from amplifier_module_provider_github_copilot.event_router import EventRouter
-        from amplifier_module_provider_github_copilot.provider import _StreamingContext  # type: ignore[attr-defined]
+        from amplifier_module_provider_github_copilot.provider import (
+            _StreamingContext,  # type: ignore[attr-defined]
+        )
         from amplifier_module_provider_github_copilot.sdk_adapter.tool_capture import (
             ToolCaptureHandler,
         )

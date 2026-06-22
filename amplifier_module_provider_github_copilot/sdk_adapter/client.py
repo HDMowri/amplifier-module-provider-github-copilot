@@ -99,6 +99,9 @@ def _minimal_mode_session_config() -> dict[str, Any]:
         "embedding_cache_storage": minimal_mode.embedding_cache_storage,
         "enable_session_telemetry": minimal_mode.enable_session_telemetry,
         "mcp_oauth_token_storage": minimal_mode.mcp_oauth_token_storage,
+        # MUST:16 — v1.0.2 mode-gated 'memory' kwarg; pinned off (mirrors the
+        # SDK empty-mode default {"enabled": False}).
+        "memory": dict(minimal_mode.memory),
     }
 
 

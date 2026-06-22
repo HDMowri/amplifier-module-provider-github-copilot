@@ -232,6 +232,64 @@ class TestSessionForwardsMaxTokens:
         assert caps.limits.max_output_tokens == 512
 
     @pytest.mark.asyncio
+    async def test_session_forwards_max_tokens_with_real_sdk_capability_types(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pin the max_tokens forward path against the REAL SDK 1.0.2 shapes.
+
+        The sibling test above uses stand-in dataclasses, which would silently
+        keep passing if the SDK renamed/removed ``max_output_tokens`` or changed
+        ``ModelCapabilitiesOverride(limits=...)``. This test binds the ACTUAL
+        ``copilot.ModelCapabilitiesOverride`` / ``copilot.ModelLimitsOverride``
+        through the ``_imports`` membrane (conftest sets SKIP_SDK_CHECK=1, which
+        nulls them) and asserts ``client.session(max_tokens=...)`` constructs the
+        real override object. A future SDK signature change makes
+        ``ModelLimitsOverride(max_output_tokens=...)`` raise ``TypeError`` here,
+        failing the upgrade loudly in CI rather than only in a manual live run.
+
+        Contract: provider-protocol:complete:MUST:10
+        """
+        from tests._sdk_version_gate import require_sdk
+
+        copilot = require_sdk()
+
+        from amplifier_module_provider_github_copilot.sdk_adapter import _imports
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import (
+            CopilotClientWrapper,
+        )
+
+        monkeypatch.setattr(_imports, "ModelLimitsOverride", copilot.ModelLimitsOverride)
+        monkeypatch.setattr(
+            _imports, "ModelCapabilitiesOverride", copilot.ModelCapabilitiesOverride
+        )
+
+        wrapper = CopilotClientWrapper()
+
+        sdk_client = MagicMock()
+        fake_sdk_session = MagicMock()
+        fake_sdk_session.session_id = "test-session-id"
+        fake_sdk_session.disconnect = AsyncMock()
+        sdk_client.create_session = AsyncMock(return_value=fake_sdk_session)
+
+        async def _fake_ensure(caller: str = "session") -> Any:  # noqa: ARG001
+            return sdk_client
+
+        wrapper._ensure_client_initialized = _fake_ensure  # type: ignore[assignment]  # noqa: SLF001
+
+        async with wrapper.session(model="gpt-4", max_tokens=512):
+            pass
+
+        sdk_client.create_session.assert_called_once()
+        kwargs = sdk_client.create_session.call_args.kwargs
+        caps = kwargs.get("model_capabilities")
+        assert isinstance(caps, copilot.ModelCapabilitiesOverride), (
+            f"Expected real copilot.ModelCapabilitiesOverride, got "
+            f"{type(caps).__name__}: {caps!r}"
+        )
+        assert isinstance(caps.limits, copilot.ModelLimitsOverride)
+        assert caps.limits.max_output_tokens == 512
+
+    @pytest.mark.asyncio
     async def test_session_omits_model_capabilities_when_max_tokens_none(
         self,
     ) -> None:

@@ -35,11 +35,18 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from tests._sdk_version_gate import require_sdk
+
+_TOKEN_ENV_VARS = ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+_MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+\-]{0,127}$")
+_KNOWN_MOCK_MODEL_IDS = frozenset({"claude-opus-4.5", "claude-sonnet-4"})
+_VALID_FINISH_REASONS = frozenset({"stop", "tool_calls", "length", "content_filter"})
 
 
 def _get_token() -> str:
@@ -47,7 +54,7 @@ def _get_token() -> str:
 
     Policy: Tests run, not skip. Missing token = test failure.
     """
-    for var in ("COPILOT_AGENT_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+    for var in _TOKEN_ENV_VARS:
         token = os.environ.get(var)
         if token:
             return token
@@ -58,28 +65,27 @@ def _get_token() -> str:
     return ""  # unreachable — pytest.fail() raises; satisfies type checker
 
 
-def _get_sdk_available() -> bool:
-    """Check if copilot SDK is installed."""
-    try:
-        import copilot  # type: ignore[import-not-found]  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
 def _is_copilot_auth_error(exc: Exception) -> bool:
     """Check if exception is a Copilot authorization/policy error.
 
     These errors indicate the Copilot feature requires enterprise/org
     policy that isn't enabled in the test environment.
     """
-    error_msg = str(exc).lower()
+    error_msg = f"{type(exc).__name__} {exc}".lower()
     auth_patterns = [
+        "401",
+        "403",
+        "access denied",
+        "auth",
+        "bad credentials",
+        "forbidden",
+        "invalid",
         "not authorized",
+        "permission",
         "enterprise or organization policy",
         "policy to be enabled",
-        "permission denied",
+        "token",
+        "unauthorized",
     ]
     return any(pattern in error_msg for pattern in auth_patterns)
 
@@ -117,6 +123,87 @@ def _create_session_config() -> dict[str, Any]:
         "on_permission_request": deny_permission_request,
         "hooks": _make_deny_hook_config(),
     }
+
+
+def _restore_real_model_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Undo the autouse model fixture for tests that must hit SDK list_models()."""
+    import amplifier_module_provider_github_copilot.models as models_module
+    import amplifier_module_provider_github_copilot.provider as provider_module
+
+    async def real_fetch_and_map_models(client: Any) -> tuple[list[Any], list[Any]]:
+        copilot_models = await models_module.fetch_models(client)
+        amplifier_models = [
+            models_module.copilot_model_to_amplifier_model(model) for model in copilot_models
+        ]
+        return amplifier_models, copilot_models
+
+    monkeypatch.setattr(models_module, "fetch_and_map_models", real_fetch_and_map_models)
+    monkeypatch.setattr(provider_module, "fetch_and_map_models", real_fetch_and_map_models)
+
+
+def _make_live_provider(live_client: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Create a provider wired to the already-started real SDK client."""
+    from amplifier_module_provider_github_copilot.provider import GitHubCopilotProvider
+    from amplifier_module_provider_github_copilot.sdk_adapter.client import CopilotClientWrapper
+
+    _restore_real_model_fetch(monkeypatch)
+    return GitHubCopilotProvider(
+        config={"use_streaming": True, "debug": False},
+        client=CopilotClientWrapper(sdk_client=live_client),
+    )
+
+
+def _assert_real_model_list(models: list[Any]) -> None:
+    """Validate model-list shape strongly enough to reject the canned fixture list."""
+    assert models, "SDK list_models() returned no models for this token"
+
+    model_ids = [getattr(model, "id", None) for model in models]
+    assert all(isinstance(model_id, str) and model_id for model_id in model_ids), (
+        f"Every model must expose a non-empty string id; got {model_ids!r}"
+    )
+    assert set(model_ids) != _KNOWN_MOCK_MODEL_IDS, (
+        "Provider model discovery returned the conftest canned model list, not live SDK data"
+    )
+
+    for model in models:
+        model_id = getattr(model, "id", None)
+        display_name = getattr(model, "display_name", None)
+        context_window = getattr(model, "context_window", None)
+        max_output_tokens = getattr(model, "max_output_tokens", None)
+        capabilities = getattr(model, "capabilities", None)
+
+        assert isinstance(model_id, str) and _MODEL_ID_PATTERN.fullmatch(model_id), (
+            f"Model id has unexpected live API shape: {model_id!r}"
+        )
+        assert isinstance(display_name, str) and display_name.strip(), (
+            f"Model {model_id!r} missing display_name"
+        )
+        assert isinstance(context_window, int) and context_window > 0, (
+            f"Model {model_id!r} missing positive context_window"
+        )
+        assert isinstance(max_output_tokens, int) and max_output_tokens > 0, (
+            f"Model {model_id!r} missing positive max_output_tokens"
+        )
+        assert isinstance(capabilities, list) and capabilities, (
+            f"Model {model_id!r} missing non-empty capabilities"
+        )
+
+
+def _assert_response_usage(usage: Any) -> None:
+    """Validate token usage metadata from a real provider completion."""
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    total_tokens = getattr(usage, "total_tokens", None)
+
+    assert isinstance(input_tokens, int) and input_tokens > 0, (
+        f"usage.input_tokens must be a positive int; got {input_tokens!r}"
+    )
+    assert isinstance(output_tokens, int) and output_tokens > 0, (
+        f"usage.output_tokens must be a positive int; got {output_tokens!r}"
+    )
+    assert total_tokens is None or (isinstance(total_tokens, int) and total_tokens > 0), (
+        f"usage.total_tokens must be None or a positive int; got {total_tokens!r}"
+    )
 
 
 # =============================================================================
@@ -161,6 +248,98 @@ async def live_client(tmp_path_factory: pytest.TempPathFactory):
         yield client
     finally:
         await client.stop()
+
+
+@pytest.fixture(autouse=True)
+def _bind_real_sdk_override_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bind the real SDK per-session override types through the _imports membrane.
+
+    conftest.py sets ``SKIP_SDK_CHECK=1`` globally, which nulls
+    ``_imports.ModelCapabilitiesOverride`` / ``_imports.ModelLimitsOverride``.
+    Live tests that forward ``max_output_tokens`` exercise the real cap path in
+    ``client.session()`` (``model_capabilities=ModelCapabilitiesOverride(
+    limits=ModelLimitsOverride(max_output_tokens=...))``), so without rebinding
+    those types this raises ``TypeError: 'NoneType' object is not callable`` —
+    a test-harness artifact, NOT a production defect. In production
+    ``SKIP_SDK_CHECK`` is unset and ``_imports`` already holds the real classes
+    (verified against github-copilot-sdk==1.0.2). ``client.py`` looks these up
+    via the membrane at call time, so patching ``_imports`` is sufficient.
+
+    Fail-closed: uses ``require_sdk()`` (which fails, never skips, on a missing
+    or wrong-version SDK), so the live test fails loudly here rather than
+    silently leaving the override types unbound.
+    """
+    copilot = require_sdk()
+
+    from amplifier_module_provider_github_copilot.sdk_adapter import _imports
+
+    monkeypatch.setattr(_imports, "ModelLimitsOverride", copilot.ModelLimitsOverride)
+    monkeypatch.setattr(
+        _imports, "ModelCapabilitiesOverride", copilot.ModelCapabilitiesOverride
+    )
+
+
+# =============================================================================
+# Real API Proof Tests
+# =============================================================================
+
+
+class TestRealApiProof:
+    """Fail-closed proof that live tests hit real GitHub Copilot APIs."""
+
+    @pytest.mark.asyncio
+    async def test_provider_list_models_returns_live_non_empty_shape(
+        self,
+        live_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        real_model_discovery: None,
+    ) -> None:
+        """Provider.list_models() must return non-empty live SDK model metadata."""
+        provider = _make_live_provider(live_client, monkeypatch)
+
+        models = await provider.list_models()
+
+        _assert_real_model_list(models)
+
+    @pytest.mark.asyncio
+    async def test_provider_complete_returns_content_finish_reason_and_usage(
+        self,
+        live_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        real_model_discovery: None,
+    ) -> None:
+        """Provider.complete() must return real response content and metadata."""
+        provider = _make_live_provider(live_client, monkeypatch)
+        models = await provider.list_models()
+        _assert_real_model_list(models)
+        model_id = models[0].id
+
+        request = SimpleNamespace(
+            model=model_id,
+            messages=[
+                SimpleNamespace(
+                    role="user",
+                    content="Reply with one short word. No punctuation.",
+                )
+            ],
+            tools=None,
+            max_output_tokens=16,
+            reasoning_effort=None,
+            metadata={"stream": False},
+        )
+
+        response = await provider.complete(request, model=model_id, _timeout_seconds=45.0)
+
+        text = getattr(response, "text", None)
+        assert isinstance(text, str) and text.strip(), "Live completion returned empty text"
+        assert response.content, "Live completion returned no content blocks"
+        assert response.finish_reason in _VALID_FINISH_REASONS, (
+            f"Unexpected finish_reason from live completion: {response.finish_reason!r}"
+        )
+        assert not response.tool_calls, (
+            "No tools were provided; live completion must not call tools"
+        )
+        _assert_response_usage(response.usage)
 
 
 # =============================================================================
@@ -276,7 +455,11 @@ class TestAuthErrorPatterns:
     """
 
     @pytest.mark.asyncio
-    async def test_invalid_token_error_shape(self) -> None:
+    async def test_invalid_token_error_shape(
+        self,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Auth errors have predictable class/message patterns.
 
         # Contract: sdk-boundary:Auth:MUST:2
@@ -285,24 +468,33 @@ class TestAuthErrorPatterns:
         should match one of our configured patterns in errors.yaml.
         If not, update errors.yaml.
         """
-        from pathlib import Path
+        from amplifier_module_provider_github_copilot.sdk_adapter.client import scrub_sdk_env
 
+        _get_token()  # Preserve live policy: missing real credentials are still a failure.
         copilot = require_sdk()
 
-        # Create client with KNOWN INVALID token
+        invalid_token = "ghp_invalid_live_negative_control_xxxxxxxxxxxxxxxxxxxx"
+        for var in _TOKEN_ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("COPILOT_GITHUB_TOKEN", invalid_token)
+        token = _get_token()
+        assert token == invalid_token, "Negative-control token was not read from monkeypatched env"
+
+        # Create client with a known invalid token resolved from in-process env.
         client = copilot.CopilotClient(
-            base_directory=str(Path.cwd() / "logs" / ".pytest-live-copilot-home"),
-            github_token="ghp_invalid_token_xxxxxxxxxxxxx",
+            base_directory=str(tmp_path_factory.mktemp("invalid-token-copilot-home")),
+            github_token=token,
             log_level="info",
-            env=dict(os.environ),
+            env=scrub_sdk_env(dict(os.environ)),
             mode="copilot-cli",
         )
-        await client.start()
+        stop_error: Exception | None = None
 
         session_config = _create_session_config()
 
         auth_error: Exception | None = None
         try:
+            await client.start()
             # SDK v0.2.0: create_session uses kwargs
             session = await client.create_session(**session_config)  # type: ignore[arg-type]
             try:
@@ -317,37 +509,25 @@ class TestAuthErrorPatterns:
         except Exception as e:
             auth_error = e
         finally:
-            await client.stop()
+            try:
+                await client.stop()
+            except Exception as e:
+                stop_error = e
 
+        if auth_error is None and stop_error is not None:
+            raise stop_error
+
+        assert isinstance(auth_error, BaseException), (
+            "Invalid-token negative control completed successfully. The SDK may have ignored "
+            "the explicit token or fallen back to cached auth."
+        )
         error_class = type(auth_error).__name__
         error_str = str(auth_error)
 
         # Log for drift detection (helps update errors.yaml)
         print(f"\n[AUTH ERROR PATTERN] class={error_class!r}, message={error_str!r}")
 
-        # These patterns should match config/errors.yaml authentication section
-        # TimeoutError is also acceptable - invalid tokens may cause SDK to hang
-        # rather than return an immediate auth rejection (environmental behavior)
-        auth_indicators = [
-            "AuthenticationError",
-            "InvalidTokenError",
-            "PermissionDeniedError",
-            "Unauthorized",
-            "401",
-            "403",
-            "invalid",
-            "token",
-            "access denied",
-            "authentication",  # SDK v0.2.0: "Session was not created with authentication"
-            "TimeoutError",  # SDK may timeout on invalid auth instead of rejecting
-            "timeout",
-        ]
-
-        matches = any(
-            p.lower() in error_class.lower() or p.lower() in error_str.lower()
-            for p in auth_indicators
-        )
-        assert matches, (
+        assert _is_copilot_auth_error(auth_error), (
             f"Auth error '{error_class}' with message '{error_str}' "
             f"doesn't match any configured pattern. "
             f"Update config/errors.yaml sdk_patterns if this is a new error type."

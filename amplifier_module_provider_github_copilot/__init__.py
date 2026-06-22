@@ -62,7 +62,7 @@ def _check_sdk_version(version_str: str) -> None:
     reinstall message instead of a deferred ``TypeError``.
 
     The floor is the symbol-availability minimum (``>=1.0.0b10``); the
-    exact pyproject pin (``==1.0.0``) is enforced separately by
+    exact pyproject pin (``==1.0.2``) is enforced separately by
     ``tests/_sdk_version_gate.py``. Earlier 1.x betas lack required
     MinimalMode kwargs and are rejected here at import time.
 
@@ -76,8 +76,8 @@ def _check_sdk_version(version_str: str) -> None:
         raise ImportError(
             f"github-copilot-sdk=={version_str} is below the symbol-availability "
             "floor (>=1.0.0b10 required; MinimalMode MUST:7-15 kwargs added at b10). "
-            "Pinned target: ==1.0.0 (pyproject.toml). "
-            "Reinstall with: pip install 'github-copilot-sdk==1.0.0' "
+            "Pinned target: ==1.0.2 (pyproject.toml). "
+            "Reinstall with: pip install 'github-copilot-sdk==1.0.2' "
             f"or: amplifier provider install --force {PROVIDER_ID}"
         )
 
@@ -106,7 +106,7 @@ if not _SKIP_SDK_CHECK:  # pragma: no cover
         # SDK required; tests only run with SDK installed
         raise ImportError(
             "Required dependency 'github-copilot-sdk' is not installed. "
-            "Install with:  pip install 'github-copilot-sdk==1.0.0'"
+            "Install with:  pip install 'github-copilot-sdk==1.0.2'"
         ) from _e
     # Contract: sdk-boundary:Membrane:MUST:5 — fail at import time on wrong version.
     _check_sdk_version(_sdk_version)
@@ -127,7 +127,7 @@ from .sdk_adapter import AUTH_ENV_VARS, CopilotClientWrapper  # noqa: E402
 
 # Contract: provider-protocol:public_api:MUST:1 — must match pyproject.toml [project].version
 # Verified by tests/test_behaviors.py::TestPackageVersionConsistency
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 # Amplifier module metadata
 __amplifier_module_type__ = "provider"
