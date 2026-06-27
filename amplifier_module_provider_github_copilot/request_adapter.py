@@ -289,10 +289,10 @@ def convert_chat_request(
             provider=PROVIDER_ID,
         )
 
-    # context_tier is read defensively: amplifier-core 1.6.0 ChatRequest has no
-    # context_tier field yet, so getattr returns None today (forward-plumbing for
-    # a future kernel that adds it). Membership validation happens in
-    # provider.complete() via validate_context_tier() before the SDK call.
+    # context_tier is read defensively via getattr: amplifier-core 1.6.0 ChatRequest
+    # has no context_tier field, so this returns None today. When None, the provider
+    # falls through to the enable_long_context config default (per MUST:13).
+    # Membership validation happens in provider.complete() via validate_context_tier().
     # Contract: provider-protocol:complete:MUST:12. Empty string normalizes to
     # None (no tier requested); a non-str, non-None value is a caller bug and raises.
     raw_context_tier = getattr(request, "context_tier", None)

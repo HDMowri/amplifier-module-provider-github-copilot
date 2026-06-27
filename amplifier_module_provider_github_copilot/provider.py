@@ -585,11 +585,7 @@ class GitHubCopilotProvider:
                     id="enable_long_context",
                     display_name="Long context tier by default",
                     field_type="boolean",
-                    prompt=(
-                        "Default to the long-context tier for your configured model? "
-                        "(Widens the compaction budget when that model offers a "
-                        "long-context tier; a per-request context_tier still overrides)"
-                    ),
+                    prompt="Default to the long-context tier when the model supports it",
                     required=False,
                     default="false",
                 ),
